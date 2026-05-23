@@ -13,6 +13,7 @@ dist/
 # Test/debug
 *.log
 perf-history.csv
+perf-deep.csv
 *-crop.png
 *.png
 !docs/screenshots/*.png

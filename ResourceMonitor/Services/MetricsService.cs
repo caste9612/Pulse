@@ -20,12 +20,12 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     private readonly PerformanceCounter? _diskWrite;
     private readonly List<PerformanceCounter> _netRecv = new();
     private readonly List<PerformanceCounter> _netSent = new();
+    private readonly PerformanceCounter? _cpuFreq;
     private readonly PerformanceCounter? _memCommitted;
     private readonly PerformanceCounter? _memCommitLimit;
     private readonly PerformanceCounter? _memCached;
     private readonly PerformanceCounter? _pageFileUsage;
     private readonly ulong _totalPhysicalRam;
-    private readonly ulong _totalDedicatedVram;
 
     public double Cpu { get; private set; }
     public double[] CpuCores { get; private set; } = Array.Empty<double>();
@@ -39,8 +39,8 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     public double RamCommittedGb { get; private set; }
     public double RamCommitLimitGb { get; private set; }
     public double PageFilePercent { get; private set; }
+    public double CpuFreqMhz { get; private set; }
     public double Gpu { get; private set; }
-    public double VramUsedPercent { get; private set; }
     public double VramUsedGb { get; private set; }
     public double VramTotalGb { get; private set; }
     public double DiskReadBytesPerSec { get; private set; }
@@ -64,6 +64,13 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
 
         _totalPhysicalRam = GetTotalPhysicalMemoryBytes();
         RamTotalGb = _totalPhysicalRam / 1024d / 1024d / 1024d;
+
+        try
+        {
+            _cpuFreq = new PerformanceCounter("Processor Information", "Processor Frequency", "0,_Total", true);
+            TryWarmup(_cpuFreq);
+        }
+        catch { }
 
         try
         {
@@ -104,10 +111,7 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
         }
         catch { }
 
-        // GPU % e VRAM used adesso letti da HardwareMonitor (LHM). Niente PerfCounter GPU qui.
-
-        _totalDedicatedVram = GetDedicatedVramBytes();
-        VramTotalGb = _totalDedicatedVram / 1024d / 1024d / 1024d;
+        // GPU, VRAM, Temp/Clock/Watt: tutto via HardwareMonitor (LHM). Niente PerfCounter GPU o WMI qui.
 
         for (int i = 0; i < HistoryLength; i++)
         {
@@ -155,6 +159,7 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
             RamCommittedGb = SafeRead(_memCommitted) / 1024d / 1024d / 1024d;
             RamCommitLimitGb = SafeRead(_memCommitLimit) / 1024d / 1024d / 1024d;
             PageFilePercent = SafeRead(_pageFileUsage);
+            CpuFreqMhz = SafeRead(_cpuFreq);
 
             double diskRead = SafeRead(_diskRead);
             double diskWrite = SafeRead(_diskWrite);
@@ -181,7 +186,6 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
             OnChanged(nameof(RamUsedPercent));
             OnChanged(nameof(RamUsedGb));
             OnChanged(nameof(Gpu));
-            OnChanged(nameof(VramUsedPercent));
             OnChanged(nameof(VramUsedGb));
             OnChanged(nameof(DiskReadBytesPerSec));
             OnChanged(nameof(DiskWriteBytesPerSec));
@@ -220,6 +224,7 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     {
         _timer.Stop();
         _cpuTotal.Dispose();
+        _cpuFreq?.Dispose();
         foreach (var c in _cpuCores) c.Dispose();
         _memCommitted?.Dispose();
         _memCommitLimit?.Dispose();
@@ -254,24 +259,5 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
         var memStatus = new MEMORYSTATUSEX();
         memStatus.dwLength = (uint)Marshal.SizeOf(memStatus);
         return GlobalMemoryStatusEx(ref memStatus) ? memStatus.ullTotalPhys : 0UL;
-    }
-
-    private static ulong GetDedicatedVramBytes()
-    {
-        try
-        {
-            using var searcher = new System.Management.ManagementObjectSearcher(
-                "SELECT AdapterRAM FROM Win32_VideoController");
-            ulong max = 0;
-            foreach (var obj in searcher.Get())
-            {
-                if (obj["AdapterRAM"] is uint v && v > max) max = v;
-            }
-            return max;
-        }
-        catch
-        {
-            return 0;
-        }
     }
 }

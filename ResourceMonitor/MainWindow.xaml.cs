@@ -205,7 +205,9 @@ public partial class MainWindow : Window
             if (_hw.GpuLoadPercent is double gl) _metrics.GpuExternal = gl;
             if (_hw.GpuMemUsedMb is double gm && gm > 0) _metrics.VramUsedExternalGb = gm / 1024d;
 
-            CpuClock.Text = _hw.CpuClockMhz is double mhz && mhz > 0 ? $"{mhz / 1000:0.00} GHz" : "";
+            double cpuMhz = (_hw.CpuClockMhz is double m && m > 0) ? m :
+                            (_metrics.CpuFreqMhz > 0 ? _metrics.CpuFreqMhz : 0);
+            CpuClock.Text = cpuMhz > 0 ? $"{cpuMhz / 1000:0.00} GHz" : "";
             CpuPower.Text = _hw.CpuPowerW is double cpw && cpw > 0 ? $"{cpw:0.0}W" : "";
 
             if (_hw.CpuTempC is double t1 && t1 > 5)

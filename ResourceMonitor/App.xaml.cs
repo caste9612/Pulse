@@ -1,13 +1,10 @@
 using System;
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.IO;
 using System.Threading;
 using System.Windows;
-using System.Windows.Forms;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using ResourceMonitor.Services;
-using Application = System.Windows.Application;
-using MessageBox = System.Windows.MessageBox;
 
 namespace ResourceMonitor;
 
@@ -20,8 +17,10 @@ public partial class App : Application
     private DriveMonitor? _drive;
     private AppSettings? _settings;
     private MainWindow? _window;
-    private NotifyIcon? _tray;
+    private TrayIcon? _tray;
     private Mutex? _singleInstance;
+    private MenuItem? _pinItem;
+    private MenuItem? _autoStartItem;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -51,95 +50,68 @@ public partial class App : Application
 
     private void BuildTrayIcon()
     {
-        var menu = new ContextMenuStrip();
+        _tray = new TrayIcon { Tooltip = "Pulse" };
+        _tray.LeftClicked += () => _window?.ToggleVisible();
+        _tray.DoubleClicked += () => _window?.ShowFromTray();
+        _tray.BuildMenu = PopulateMenu;
+        _tray.Initialize();
+    }
 
-        var showItem = new ToolStripMenuItem("Mostra / Nascondi", null, (_, _) => _window?.ToggleVisible());
-        var pinItem = new ToolStripMenuItem("Sempre in primo piano")
+    private void PopulateMenu(ContextMenu menu)
+    {
+        var showItem = new MenuItem { Header = "Mostra / Nascondi" };
+        showItem.Click += (_, _) => _window?.ToggleVisible();
+
+        _pinItem = new MenuItem
         {
-            CheckOnClick = true,
-            Checked = _settings?.Topmost ?? true
+            Header = "Sempre in primo piano",
+            IsCheckable = true,
+            IsChecked = _settings?.Topmost ?? true
         };
-        pinItem.CheckedChanged += (_, _) =>
+        _pinItem.Click += (_, _) =>
         {
             if (_window != null && _settings != null)
             {
-                _window.Topmost = pinItem.Checked;
+                _window.Topmost = _pinItem.IsChecked;
                 _window.UpdatePinGlyph();
-                _settings.Topmost = pinItem.Checked;
+                _settings.Topmost = _pinItem.IsChecked;
                 SettingsService.Save(_settings);
             }
         };
 
-        var autoStartItem = new ToolStripMenuItem("Avvia con Windows")
+        _autoStartItem = new MenuItem
         {
-            CheckOnClick = true,
-            Checked = AutoStart.IsEnabled()
+            Header = "Avvia con Windows",
+            IsCheckable = true,
+            IsChecked = AutoStart.IsEnabled()
         };
-        autoStartItem.CheckedChanged += (_, _) =>
+        _autoStartItem.Click += (_, _) =>
         {
-            AutoStart.Set(autoStartItem.Checked);
-            if (_settings != null) { _settings.AutoStart = autoStartItem.Checked; SettingsService.Save(_settings); }
+            AutoStart.Set(_autoStartItem.IsChecked);
+            if (_settings != null) { _settings.AutoStart = _autoStartItem.IsChecked; SettingsService.Save(_settings); }
         };
-
-        var exitItem = new ToolStripMenuItem("Esci", null, (_, _) => ExitApp());
 
         menu.Items.Add(showItem);
-        menu.Items.Add(pinItem);
-        menu.Items.Add(autoStartItem);
+        menu.Items.Add(_pinItem);
+        menu.Items.Add(_autoStartItem);
 
         if (!IsAdmin())
         {
-            menu.Items.Add(new ToolStripSeparator());
-            var adminItem = new ToolStripMenuItem("Riavvia come amministratore",
-                null,
-                (_, _) => RestartAsAdmin());
-            adminItem.ToolTipText = "Abilita lettura temp/watt CPU (registri MSR)";
+            menu.Items.Add(new Separator());
+            var adminItem = new MenuItem
+            {
+                Header = "Riavvia come amministratore",
+                ToolTip = "Abilita lettura temp/watt CPU (registri MSR)"
+            };
+            adminItem.Click += (_, _) => RestartAsAdmin();
             menu.Items.Add(adminItem);
         }
 
-        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(new Separator());
+        var exitItem = new MenuItem { Header = "Esci" };
+        exitItem.Click += (_, _) => ExitApp();
         menu.Items.Add(exitItem);
-
-        _tray = new NotifyIcon
-        {
-            Icon = CreateTrayIcon(),
-            Visible = true,
-            Text = "Resource Monitor",
-            ContextMenuStrip = menu
-        };
-        _tray.MouseClick += (_, args) =>
-        {
-            if (args.Button == MouseButtons.Left)
-                _window?.ToggleVisible();
-        };
-        _tray.DoubleClick += (_, _) => _window?.ShowFromTray();
     }
-
-    private static Icon CreateTrayIcon()
-    {
-        const int size = 32;
-        using var bmp = new Bitmap(size, size);
-        using (var g = Graphics.FromImage(bmp))
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Color.Transparent);
-            using var bg = new SolidBrush(Color.FromArgb(230, 27, 27, 35));
-            g.FillEllipse(bg, 1, 1, size - 2, size - 2);
-            using var pen = new Pen(Color.FromArgb(255, 111, 207, 232), 2.6f) { LineJoin = LineJoin.Round };
-            var pts = new[]
-            {
-                new PointF(6, 22), new PointF(11, 14), new PointF(16, 19),
-                new PointF(21, 9), new PointF(26, 16)
-            };
-            g.DrawLines(pen, pts);
-        }
-        var hIcon = bmp.GetHicon();
-        try { return Icon.FromHandle(hIcon).Clone() as Icon ?? SystemIcons.Application; }
-        finally { DestroyIcon(hIcon); }
-    }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool DestroyIcon(IntPtr handle);
 
     private static bool IsAdmin()
     {
@@ -167,15 +139,12 @@ public partial class App : Application
             System.Diagnostics.Process.Start(psi);
             ExitApp();
         }
-        catch
-        {
-            // utente ha rifiutato UAC
-        }
+        catch { /* user denied UAC */ }
     }
 
     private void ExitApp()
     {
-        if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
+        _tray?.Dispose();
         _metrics?.Dispose();
         _hw?.Dispose();
         if (_window != null) _window.Close();

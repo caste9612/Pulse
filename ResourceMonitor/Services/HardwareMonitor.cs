@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.Linq;
-using System.Management;
 using LibreHardwareMonitor.Hardware;
 
 namespace ResourceMonitor.Services;
@@ -32,6 +31,13 @@ public sealed class HardwareMonitor : IDisposable
 
     public HardwareMonitor()
     {
+        // TEST: skip init to measure LHM cost
+        if (Environment.GetEnvironmentVariable("PULSE_NO_LHM") == "1")
+        {
+            _initTask = System.Threading.Tasks.Task.CompletedTask;
+            _enabled = false;
+            return;
+        }
         _initTask = System.Threading.Tasks.Task.Run(InitializeNow);
     }
 
@@ -43,7 +49,7 @@ public sealed class HardwareMonitor : IDisposable
             {
                 IsCpuEnabled = true,
                 IsGpuEnabled = true,
-                IsStorageEnabled = true,
+                IsStorageEnabled = false,
                 IsMemoryEnabled = false,
                 IsMotherboardEnabled = false,
                 IsNetworkEnabled = false,
@@ -215,11 +221,6 @@ public sealed class HardwareMonitor : IDisposable
             if (cpuTemp is not null && cpuTemp < 5) cpuTemp = null;
             CpuTempFromWmi = false;
 
-            if (cpuClock is null || cpuClock <= 0)
-            {
-                var wmiClock = TryReadWmiCpuClock();
-                if (wmiClock is not null) cpuClock = wmiClock;
-            }
 
             CpuTempC = cpuTemp;
             CpuClockMhz = cpuClock;
@@ -235,71 +236,6 @@ public sealed class HardwareMonitor : IDisposable
         catch (Exception ex)
         {
             Debug.WriteLine($"HardwareMonitor update failed: {ex.Message}");
-        }
-    }
-
-    private void DumpSensors()
-    {
-        if (_computer is null) return;
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"# Pulse sensor dump @ {DateTime.Now:O}");
-        sb.AppendLine($"# Admin: {(new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent())).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator)}");
-        foreach (var hw in _computer.Hardware)
-        {
-            sb.AppendLine();
-            sb.AppendLine($"== {hw.HardwareType}: {hw.Name} ==");
-            try { hw.Update(); } catch { }
-            foreach (var s in hw.Sensors)
-            {
-                string val = s.Value.HasValue ? s.Value.Value.ToString("0.00") : "null";
-                sb.AppendLine($"  [{s.SensorType,-15}] {s.Name,-40} = {val}");
-            }
-        }
-        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "pulse-sensors.txt");
-        System.IO.File.WriteAllText(path, sb.ToString());
-    }
-
-    private static double? TryReadWmiCpuClock()
-    {
-        try
-        {
-            using var searcher = new ManagementObjectSearcher(
-                "SELECT CurrentClockSpeed FROM Win32_Processor");
-            foreach (var obj in searcher.Get())
-            {
-                if (obj["CurrentClockSpeed"] is uint mhz && mhz > 0) return mhz;
-            }
-        }
-        catch { }
-        return null;
-    }
-
-    private static double? TryReadAcpiCpuTemp()
-    {
-        try
-        {
-            using var searcher = new ManagementObjectSearcher(
-                @"root\WMI",
-                "SELECT CurrentTemperature FROM MSAcpi_ThermalZoneTemperature");
-            double? maxTemp = null;
-            foreach (var obj in searcher.Get())
-            {
-                if (obj["CurrentTemperature"] is ushort tu)
-                {
-                    double c = (tu - 2732) / 10.0;
-                    if (c > 0 && c < 130 && (maxTemp is null || c > maxTemp)) maxTemp = c;
-                }
-                else if (obj["CurrentTemperature"] is uint ti)
-                {
-                    double c = (ti - 2732) / 10.0;
-                    if (c > 0 && c < 130 && (maxTemp is null || c > maxTemp)) maxTemp = c;
-                }
-            }
-            return maxTemp;
-        }
-        catch
-        {
-            return null;
         }
     }
 

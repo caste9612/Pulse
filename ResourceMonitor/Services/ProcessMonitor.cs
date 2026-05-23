@@ -23,6 +23,7 @@ public sealed class ProcessMonitor
 
     public void Update()
     {
+        if (Environment.GetEnvironmentVariable("PULSE_NO_PROC") == "1") return;
         var samples = new List<ProcessSample>(256);
         var now = DateTime.UtcNow;
         var current = new Dictionary<int, (TimeSpan, DateTime)>(256);
