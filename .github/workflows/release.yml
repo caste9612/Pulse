@@ -60,11 +60,24 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
+          Write-Host "Looking for ISCC.exe..."
+          $iscc = Get-ChildItem -Path "C:\Program Files (x86)\Inno Setup*", "C:\Program Files\Inno Setup*" -Filter "ISCC.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) {
+            Write-Error "ISCC.exe not found after installing Inno Setup"
+            exit 1
+          }
+          Write-Host "Found ISCC.exe at: $($iscc.FullName)"
+          "ISCC=$($iscc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build installer
         shell: pwsh
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/pulse.iss
+          Write-Host "Pre-build: contents of dist/"
+          Get-ChildItem dist -ErrorAction SilentlyContinue
+          Write-Host "Running: $env:ISCC installer/pulse.iss"
+          & "$env:ISCC" installer/pulse.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Output:"
           Get-ChildItem installer/Output
 
       - name: Build portable zip

@@ -30,7 +30,6 @@ PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
-SetupIconFile=..\ResourceMonitor\Resources\app.ico
 MinVersion=10.0.17763
 
 [Languages]
