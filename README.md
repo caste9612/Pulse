@@ -70,8 +70,8 @@ Right-click the tray icon (near the clock) for:
 See [docs/BUILD.md](docs/BUILD.md) for full instructions. TL;DR:
 
 ```bash
-git clone https://github.com/<user>/pulse
-cd pulse/ResourceMonitor
+git clone https://github.com/caste9612/Pulse
+cd Pulse/ResourceMonitor
 dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o ../dist
 ```
 
