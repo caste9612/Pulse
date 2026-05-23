@@ -1,0 +1,102 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.0.0) — used only for manual dispatch'
+        required: false
+        default: '0.0.0-dev'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -match 'refs/tags/v(.+)') {
+            $version = $Matches[1]
+          } else {
+            $version = '${{ github.event.inputs.version }}'
+          }
+          Write-Host "Version: $version"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Publish (Release / single-file / R2R)
+        shell: pwsh
+        run: |
+          dotnet publish ResourceMonitor/ResourceMonitor.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained false `
+            -p:PublishSingleFile=true `
+            -p:Version=${{ steps.ver.outputs.version }} `
+            -o dist
+
+      - name: Patch installer version
+        shell: pwsh
+        run: |
+          $iss = "installer/pulse.iss"
+          (Get-Content $iss) -replace '#define MyAppVersion ".+"', '#define MyAppVersion "${{ steps.ver.outputs.version }}"' | Set-Content $iss
+          Get-Content $iss | Select-String "MyAppVersion"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/pulse.iss
+          Get-ChildItem installer/Output
+
+      - name: Build portable zip
+        shell: pwsh
+        run: |
+          $outDir = "portable"
+          New-Item -ItemType Directory -Force $outDir | Out-Null
+          Copy-Item dist/* $outDir/
+          Copy-Item README.md, LICENSE $outDir/
+          Compress-Archive -Path "$outDir\*" -DestinationPath "Pulse-v${{ steps.ver.outputs.version }}-portable.zip" -Force
+          Get-ChildItem *.zip
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: installer/Output/*.exe
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable
+          path: '*.zip'
+
+      - name: Create GitHub Release (draft)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: Pulse v${{ steps.ver.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            installer/Output/*.exe
+            *.zip

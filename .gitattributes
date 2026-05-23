@@ -1,0 +1,20 @@
+# Normalize line endings
+* text=auto
+
+# Force LF for shell/yaml/text files
+*.sh         text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+
+# Force CRLF for Windows-only files
+*.ps1        text eol=crlf
+*.bat        text eol=crlf
+*.cmd        text eol=crlf
+*.iss        text eol=crlf
+
+# Binary
+*.png        binary
+*.ico        binary
+*.dll        binary
+*.exe        binary
+*.pdb        binary
