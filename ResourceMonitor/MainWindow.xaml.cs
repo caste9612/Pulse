@@ -268,11 +268,13 @@ public partial class MainWindow : Window
             await Task.Run(() => _proc.Update());
             TopCpuList.ItemsSource = _proc.TopByCpu.Select(p => new ProcessRow
             {
+                Pid = p.Pid,
                 Name = p.Name,
                 Value = $"{p.CpuPercent,5:0.0}%"
             }).ToArray();
             TopRamList.ItemsSource = _proc.TopByMemory.Select(p => new ProcessRow
             {
+                Pid = p.Pid,
                 Name = p.Name,
                 Value = FmtRam(p.WorkingSetBytes)
             }).ToArray();
@@ -408,6 +410,105 @@ public partial class MainWindow : Window
         if (Top > maxY) Top = maxY - 40;
     }
 
+    private static ProcessRow? ExtractRow(object sender) =>
+        sender is System.Windows.Controls.MenuItem mi ? mi.CommandParameter as ProcessRow : null;
+
+    private void ProcOpenFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var row = ExtractRow(sender);
+        if (row is null) return;
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById(row.Pid);
+            var path = p.MainModule?.FileName;
+            if (!string.IsNullOrEmpty(path))
+                System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{path}\"");
+        }
+        catch { /* Access denied for system processes, ignore */ }
+    }
+
+    private void ProcProperties_Click(object sender, RoutedEventArgs e)
+    {
+        var row = ExtractRow(sender);
+        if (row is null) return;
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById(row.Pid);
+            var path = p.MainModule?.FileName;
+            if (string.IsNullOrEmpty(path)) return;
+            var info = new SHELLEXECUTEINFO
+            {
+                cbSize = Marshal.SizeOf<SHELLEXECUTEINFO>(),
+                lpVerb = "properties",
+                lpFile = path,
+                nShow = 1,
+                fMask = 0x0000000C // SEE_MASK_INVOKEIDLIST | SEE_MASK_NOCLOSEPROCESS
+            };
+            ShellExecuteEx(ref info);
+        }
+        catch { }
+    }
+
+    private void ProcKill_Click(object sender, RoutedEventArgs e)
+    {
+        var row = ExtractRow(sender);
+        if (row is null) return;
+        var result = MessageBox.Show(
+            $"Terminare {row.Name} (PID {row.Pid})?",
+            "Conferma",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (result != MessageBoxResult.Yes) return;
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById(row.Pid);
+            p.Kill();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Impossibile terminare: {ex.Message}", "Errore",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ProcSearch_Click(object sender, RoutedEventArgs e)
+    {
+        var row = ExtractRow(sender);
+        if (row is null) return;
+        var url = $"https://www.google.com/search?q={Uri.EscapeDataString(row.Name + " process windows")}";
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
+            {
+                UseShellExecute = true
+            });
+        }
+        catch { }
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    private struct SHELLEXECUTEINFO
+    {
+        public int cbSize;
+        public uint fMask;
+        public IntPtr hwnd;
+        [MarshalAs(UnmanagedType.LPTStr)] public string lpVerb;
+        [MarshalAs(UnmanagedType.LPTStr)] public string lpFile;
+        [MarshalAs(UnmanagedType.LPTStr)] public string? lpParameters;
+        [MarshalAs(UnmanagedType.LPTStr)] public string? lpDirectory;
+        public int nShow;
+        public IntPtr hInstApp;
+        public IntPtr lpIDList;
+        [MarshalAs(UnmanagedType.LPTStr)] public string? lpClass;
+        public IntPtr hkeyClass;
+        public uint dwHotKey;
+        public IntPtr hIcon;
+        public IntPtr hProcess;
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern bool ShellExecuteEx(ref SHELLEXECUTEINFO lpExecInfo);
+
     private const int WM_NCLBUTTONDOWN = 0x00A1;
     private const int HTBOTTOMRIGHT = 17;
 
@@ -429,6 +530,7 @@ public partial class MainWindow : Window
 
 internal sealed class ProcessRow
 {
+    public int Pid { get; init; }
     public string Name { get; init; } = string.Empty;
     public string Value { get; init; } = string.Empty;
 }

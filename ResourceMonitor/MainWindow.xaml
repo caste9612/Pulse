@@ -354,7 +354,29 @@
                             <ItemsControl x:Name="TopCpuList">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Grid Margin="0,1,0,1">
+                                        <Grid Margin="0,1,0,1" Background="Transparent">
+                                            <Grid.ContextMenu>
+                                                <ContextMenu Background="#F01E1E26"
+                                                             Foreground="#F5F5F7"
+                                                             BorderBrush="#40FFFFFF"
+                                                             BorderThickness="1"
+                                                             DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                                    <MenuItem Header="Apri cartella file"
+                                                              Click="ProcOpenFolder_Click"
+                                                              CommandParameter="{Binding}"/>
+                                                    <MenuItem Header="Propriet&#224; file"
+                                                              Click="ProcProperties_Click"
+                                                              CommandParameter="{Binding}"/>
+                                                    <Separator/>
+                                                    <MenuItem Header="Termina processo"
+                                                              Click="ProcKill_Click"
+                                                              CommandParameter="{Binding}"/>
+                                                    <Separator/>
+                                                    <MenuItem Header="Cerca online"
+                                                              Click="ProcSearch_Click"
+                                                              CommandParameter="{Binding}"/>
+                                                </ContextMenu>
+                                            </Grid.ContextMenu>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
@@ -373,7 +395,29 @@
                             <ItemsControl x:Name="TopRamList">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Grid Margin="0,1,0,1">
+                                        <Grid Margin="0,1,0,1" Background="Transparent">
+                                            <Grid.ContextMenu>
+                                                <ContextMenu Background="#F01E1E26"
+                                                             Foreground="#F5F5F7"
+                                                             BorderBrush="#40FFFFFF"
+                                                             BorderThickness="1"
+                                                             DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                                    <MenuItem Header="Apri cartella file"
+                                                              Click="ProcOpenFolder_Click"
+                                                              CommandParameter="{Binding}"/>
+                                                    <MenuItem Header="Propriet&#224; file"
+                                                              Click="ProcProperties_Click"
+                                                              CommandParameter="{Binding}"/>
+                                                    <Separator/>
+                                                    <MenuItem Header="Termina processo"
+                                                              Click="ProcKill_Click"
+                                                              CommandParameter="{Binding}"/>
+                                                    <Separator/>
+                                                    <MenuItem Header="Cerca online"
+                                                              Click="ProcSearch_Click"
+                                                              CommandParameter="{Binding}"/>
+                                                </ContextMenu>
+                                            </Grid.ContextMenu>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
