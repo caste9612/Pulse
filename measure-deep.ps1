@@ -1,18 +1,18 @@
 param(
-    [string]$ExePath = "C:\Users\wcast\Desktop\resourcemonitor\dist\ResourceMonitor.exe",
+    [string]$ExePath = "C:\Users\wcast\Desktop\resourcemonitor\dist\Pulse.exe",
     [string]$Label = "current",
     [switch]$ClearCache,
     [int]$DurationSec = 120
 )
 
 # Kill any running instance
-Get-Process -Name ResourceMonitor -ErrorAction SilentlyContinue | ForEach-Object {
+Get-Process -Name Pulse,ResourceMonitor -ErrorAction SilentlyContinue | ForEach-Object {
     try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch {}
 }
 Start-Sleep -Milliseconds 800
 
 if ($ClearCache) {
-    $cacheDir = Join-Path $env:LOCALAPPDATA "Temp\.net\ResourceMonitor"
+    $cacheDir = Join-Path $env:LOCALAPPDATA "Temp\.net\Pulse"
     if (Test-Path $cacheDir) {
         Remove-Item -Recurse -Force $cacheDir -ErrorAction SilentlyContinue
     }

@@ -5,7 +5,7 @@
 #define MyAppName "Pulse"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Pulse Contributors"
-#define MyAppExeName "ResourceMonitor.exe"
+#define MyAppExeName "Pulse.exe"
 #define MyAppTaskName "Pulse"
 
 [Setup]
@@ -52,7 +52,7 @@ Name: "startup_admin"; Description: "{cm:StartupAdminTask}"; GroupDescription: "
 Name: "desktopicon"; Description: "{cm:DesktopIconTask}"; GroupDescription: "{cm:OptionsGroup}"; Flags: unchecked
 
 [Files]
-Source: "..\dist\ResourceMonitor.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\Pulse.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion

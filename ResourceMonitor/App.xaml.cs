@@ -26,7 +26,7 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        _singleInstance = new Mutex(true, "ResourceMonitor.SingleInstance", out bool isNew);
+        _singleInstance = new Mutex(true, "Pulse.SingleInstance", out bool isNew);
         if (!isNew)
         {
             Shutdown();
@@ -162,7 +162,7 @@ public partial class App : Application
 internal static class AutoStart
 {
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName = "ResourceMonitor";
+    private const string ValueName = "Pulse";
 
     public static bool IsEnabled()
     {

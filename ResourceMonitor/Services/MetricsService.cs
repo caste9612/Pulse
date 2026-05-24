@@ -2,9 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Windows.Threading;
 
 namespace ResourceMonitor.Services;
@@ -14,18 +12,7 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     public const int HistoryLength = 60;
 
     private readonly DispatcherTimer _timer;
-    private readonly PerformanceCounter _cpuTotal;
-    private readonly List<PerformanceCounter> _cpuCores = new();
-    private readonly PerformanceCounter? _diskRead;
-    private readonly PerformanceCounter? _diskWrite;
-    private readonly List<PerformanceCounter> _netRecv = new();
-    private readonly List<PerformanceCounter> _netSent = new();
-    private readonly PerformanceCounter? _cpuFreq;
-    private readonly PerformanceCounter? _memCommitted;
-    private readonly PerformanceCounter? _memCommitLimit;
-    private readonly PerformanceCounter? _memCached;
-    private readonly PerformanceCounter? _pageFileUsage;
-    private readonly ulong _totalPhysicalRam;
+    private readonly NativeMetrics _native = new();
 
     public double Cpu { get; private set; }
     public double[] CpuCores { get; private set; } = Array.Empty<double>();
@@ -59,60 +46,7 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
 
     public MetricsService()
     {
-        _cpuTotal = new PerformanceCounter("Processor Information", "% Processor Utility", "_Total", true);
-        TryWarmup(_cpuTotal);
-
-        _totalPhysicalRam = GetTotalPhysicalMemoryBytes();
-        RamTotalGb = _totalPhysicalRam / 1024d / 1024d / 1024d;
-
-        try
-        {
-            _cpuFreq = new PerformanceCounter("Processor Information", "Processor Frequency", "0,_Total", true);
-            TryWarmup(_cpuFreq);
-        }
-        catch { }
-
-        try
-        {
-            _memCommitted = new PerformanceCounter("Memory", "Committed Bytes", true);
-            _memCommitLimit = new PerformanceCounter("Memory", "Commit Limit", true);
-            _memCached = new PerformanceCounter("Memory", "Cache Bytes", true);
-            _pageFileUsage = new PerformanceCounter("Paging File", "% Usage", "_Total", true);
-            TryWarmup(_memCommitted);
-            TryWarmup(_memCommitLimit);
-            TryWarmup(_memCached);
-            TryWarmup(_pageFileUsage);
-        }
-        catch { }
-
-        try
-        {
-            _diskRead = new PerformanceCounter("PhysicalDisk", "Disk Read Bytes/sec", "_Total", true);
-            _diskWrite = new PerformanceCounter("PhysicalDisk", "Disk Write Bytes/sec", "_Total", true);
-            TryWarmup(_diskRead);
-            TryWarmup(_diskWrite);
-        }
-        catch { }
-
-        try
-        {
-            var netCat = new PerformanceCounterCategory("Network Interface");
-            foreach (var inst in netCat.GetInstanceNames())
-            {
-                if (inst.Contains("Loopback", StringComparison.OrdinalIgnoreCase)) continue;
-                if (inst.Contains("isatap", StringComparison.OrdinalIgnoreCase)) continue;
-                var recv = new PerformanceCounter("Network Interface", "Bytes Received/sec", inst, true);
-                var sent = new PerformanceCounter("Network Interface", "Bytes Sent/sec", inst, true);
-                TryWarmup(recv);
-                TryWarmup(sent);
-                _netRecv.Add(recv);
-                _netSent.Add(sent);
-            }
-        }
-        catch { }
-
-        // GPU, VRAM, Temp/Clock/Watt: tutto via HardwareMonitor (LHM). Niente PerfCounter GPU o WMI qui.
-
+        // Init: pre-fill history con zeri
         for (int i = 0; i < HistoryLength; i++)
         {
             CpuHistory.Enqueue(0);
@@ -121,6 +55,16 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
             DiskHistory.Enqueue(0);
             NetHistory.Enqueue(0);
         }
+
+        // Prime CPU baseline (la prima chiamata ritorna 0)
+        _native.GetCpuPercent();
+        // Prime disk/net baselines pure (le rate richiedono 2 sample)
+        _native.GetDiskRates();
+        _native.GetNetworkRates();
+
+        // RamTotal è statico, lo leggiamo una volta
+        var memInit = _native.GetMemory();
+        RamTotalGb = memInit.TotalGb;
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += (_, _) => Tick();
@@ -131,47 +75,36 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
         _timer.Start();
         Tick();
     }
-    public void Stop() => _timer.Stop();
 
-    private static void TryWarmup(PerformanceCounter c)
-    {
-        try { c.NextValue(); } catch { }
-    }
+    public void Stop() => _timer.Stop();
 
     private void Tick()
     {
         var sw = Stopwatch.StartNew();
         try
         {
-            Cpu = Math.Clamp(SafeRead(_cpuTotal), 0, 100);
+            Cpu = _native.GetCpuPercent();
 
-            var memStatus = new MEMORYSTATUSEX();
-            memStatus.dwLength = (uint)Marshal.SizeOf(memStatus);
-            if (GlobalMemoryStatusEx(ref memStatus))
-            {
-                ulong used = memStatus.ullTotalPhys - memStatus.ullAvailPhys;
-                RamUsedGb = used / 1024d / 1024d / 1024d;
-                RamAvailableGb = memStatus.ullAvailPhys / 1024d / 1024d / 1024d;
-                RamUsedPercent = memStatus.dwMemoryLoad;
-            }
+            var mem = _native.GetMemory();
+            RamUsedPercent = mem.UsedPercent;
+            RamUsedGb = mem.UsedGb;
+            RamAvailableGb = mem.AvailableGb;
+            RamCachedGb = mem.CachedGb;
+            RamCommittedGb = mem.CommittedGb;
+            RamCommitLimitGb = mem.CommitLimitGb;
+            PageFilePercent = mem.PageFilePercent;
 
-            RamCachedGb = SafeRead(_memCached) / 1024d / 1024d / 1024d;
-            RamCommittedGb = SafeRead(_memCommitted) / 1024d / 1024d / 1024d;
-            RamCommitLimitGb = SafeRead(_memCommitLimit) / 1024d / 1024d / 1024d;
-            PageFilePercent = SafeRead(_pageFileUsage);
-            CpuFreqMhz = SafeRead(_cpuFreq);
+            CpuFreqMhz = _native.GetCpuFreqMhz();
 
-            double diskRead = SafeRead(_diskRead);
-            double diskWrite = SafeRead(_diskWrite);
-            DiskReadBytesPerSec = diskRead;
-            DiskWriteBytesPerSec = diskWrite;
-            double diskBps = diskRead + diskWrite;
+            var diskRates = _native.GetDiskRates();
+            DiskReadBytesPerSec = diskRates.ReadBytesPerSec;
+            DiskWriteBytesPerSec = diskRates.WriteBytesPerSec;
+            double diskBps = diskRates.ReadBytesPerSec + diskRates.WriteBytesPerSec;
 
-            double netRecv = _netRecv.Sum(SafeRead);
-            double netSent = _netSent.Sum(SafeRead);
-            NetRecvBytesPerSec = netRecv;
-            NetSentBytesPerSec = netSent;
-            double netBps = netRecv + netSent;
+            var netRates = _native.GetNetworkRates();
+            NetRecvBytesPerSec = netRates.ReceiveBytesPerSec;
+            NetSentBytesPerSec = netRates.SendBytesPerSec;
+            double netBps = netRates.ReceiveBytesPerSec + netRates.SendBytesPerSec;
 
             Gpu = GpuExternal;
             VramUsedGb = VramUsedExternalGb;
@@ -201,14 +134,8 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
         finally
         {
             sw.Stop();
-            PerfLog.LogSlow("MetricsTick", sw.ElapsedMilliseconds, 100);
+            PerfLog.LogSlow("MetricsTick", sw.ElapsedMilliseconds, 50);
         }
-    }
-
-    private static double SafeRead(PerformanceCounter? c)
-    {
-        if (c is null) return 0;
-        try { return c.NextValue(); } catch { return 0; }
     }
 
     private static void PushHistory(Queue<double> q, double v)
@@ -223,41 +150,5 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     public void Dispose()
     {
         _timer.Stop();
-        _cpuTotal.Dispose();
-        _cpuFreq?.Dispose();
-        foreach (var c in _cpuCores) c.Dispose();
-        _memCommitted?.Dispose();
-        _memCommitLimit?.Dispose();
-        _memCached?.Dispose();
-        _pageFileUsage?.Dispose();
-        _diskRead?.Dispose();
-        _diskWrite?.Dispose();
-        foreach (var c in _netRecv) c.Dispose();
-        foreach (var c in _netSent) c.Dispose();
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-    private struct MEMORYSTATUSEX
-    {
-        public uint dwLength;
-        public uint dwMemoryLoad;
-        public ulong ullTotalPhys;
-        public ulong ullAvailPhys;
-        public ulong ullTotalPageFile;
-        public ulong ullAvailPageFile;
-        public ulong ullTotalVirtual;
-        public ulong ullAvailVirtual;
-        public ulong ullAvailExtendedVirtual;
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
-
-    private static ulong GetTotalPhysicalMemoryBytes()
-    {
-        var memStatus = new MEMORYSTATUSEX();
-        memStatus.dwLength = (uint)Marshal.SizeOf(memStatus);
-        return GlobalMemoryStatusEx(ref memStatus) ? memStatus.ullTotalPhys : 0UL;
     }
 }
