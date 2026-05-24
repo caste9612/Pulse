@@ -84,54 +84,84 @@ public sealed class Sparkline : FrameworkElement
 
     public void Invalidate() => InvalidateVisual();
 
+    // Buffer riutilizzato fra render (Point[] e Brush/Pen cache).
+    private Point[]? _pointsBuf;
+    private SolidColorBrush? _haloBrushCache;
+    private Color _haloBrushColor;
+    private LinearGradientBrush? _fillBrushCache;
+    private Color _fillBrushTopColor;
+
     protected override void OnRender(DrawingContext dc)
     {
-        var values = Values?.ToArray();
-        if (values is null || values.Length < 2) return;
+        var values = Values;
+        if (values is null) return;
+
+        int n;
+        if (values is IReadOnlyCollection<double> coll) n = coll.Count;
+        else { n = 0; foreach (var _ in values) n++; }
+        if (n < 2) return;
 
         double w = ActualWidth;
         double h = ActualHeight;
         if (w <= 0 || h <= 0) return;
 
-        double max = AutoScale ? Math.Max(1, values.Max()) : MaxValue;
-        if (max <= 0) max = 1;
-
-        double stepX = w / (values.Length - 1);
-        double pad = 2;
-        double usableH = h - pad * 2;
-
-        // Compute points
-        var points = new Point[values.Length];
-        for (int i = 0; i < values.Length; i++)
+        // Calcola max (autoscale) o usa MaxValue. Iterate enumerator, no ToArray.
+        double max;
+        if (AutoScale)
         {
-            double norm = Math.Clamp(values[i] / max, 0, 1);
-            points[i] = new Point(i * stepX, h - pad - norm * usableH);
+            max = 1;
+            foreach (var v in values) if (v > max) max = v;
+        }
+        else
+        {
+            max = MaxValue > 0 ? MaxValue : 1;
         }
 
-        // FILL with vertical gradient (more opaque on top, fading down)
+        // Riusa buffer se possibile
+        if (_pointsBuf is null || _pointsBuf.Length < n) _pointsBuf = new Point[n];
+        var points = _pointsBuf;
+
+        double stepX = w / (n - 1);
+        const double pad = 2;
+        double usableH = h - pad * 2;
+        int idx = 0;
+        foreach (var v in values)
+        {
+            if (idx >= n) break;
+            double norm = Math.Clamp(v / max, 0, 1);
+            points[idx] = new Point(idx * stepX, h - pad - norm * usableH);
+            idx++;
+        }
+
         var lineColor = GetStrokeColor();
+
+        // FILL — gradient verticale (riutilizziamo il brush se il colore non cambia)
         var fillTop = Color.FromArgb((byte)(FillOpacity * 255), lineColor.R, lineColor.G, lineColor.B);
-        var fillBot = Color.FromArgb(0, lineColor.R, lineColor.G, lineColor.B);
-        var fillBrush = new LinearGradientBrush(fillTop, fillBot, 90);
-        if (fillBrush.CanFreeze) fillBrush.Freeze();
+        if (_fillBrushCache is null || _fillBrushTopColor != fillTop)
+        {
+            var fillBot = Color.FromArgb(0, lineColor.R, lineColor.G, lineColor.B);
+            _fillBrushCache = new LinearGradientBrush(fillTop, fillBot, 90);
+            if (_fillBrushCache.CanFreeze) _fillBrushCache.Freeze();
+            _fillBrushTopColor = fillTop;
+        }
 
         var fillGeo = new StreamGeometry();
         using (var ctx = fillGeo.Open())
         {
             ctx.BeginFigure(new Point(0, h), true, true);
             ctx.LineTo(points[0], false, false);
-            AppendSmoothCurve(ctx, points);
+            AppendSmoothCurve(ctx, points, n);
             ctx.LineTo(new Point(w, h), false, false);
         }
         fillGeo.Freeze();
-        dc.DrawGeometry(fillBrush, null, fillGeo);
+        dc.DrawGeometry(_fillBrushCache, null, fillGeo);
 
-        // STROKE — smooth Bezier curve
+        // STROKE
         var lineGeo = new StreamGeometry();
         using (var ctx = lineGeo.Open())
         {
             ctx.BeginFigure(points[0], false, false);
-            AppendSmoothCurve(ctx, points);
+            AppendSmoothCurve(ctx, points, n);
         }
         lineGeo.Freeze();
 
@@ -144,33 +174,33 @@ public sealed class Sparkline : FrameworkElement
         if (pen.CanFreeze) pen.Freeze();
         dc.DrawGeometry(null, pen, lineGeo);
 
-        // DOT on last value (subtle highlight)
+        // DOT on last value
         if (ShowEndDot)
         {
-            var last = points[points.Length - 1];
+            var last = points[n - 1];
             double dotR = StrokeThickness * 1.6;
 
-            // Outer halo
-            var halo = new SolidColorBrush(Color.FromArgb(70, lineColor.R, lineColor.G, lineColor.B));
-            halo.Freeze();
-            dc.DrawEllipse(halo, null, last, dotR * 2.0, dotR * 2.0);
-
-            // Inner solid dot
+            var haloColor = Color.FromArgb(70, lineColor.R, lineColor.G, lineColor.B);
+            if (_haloBrushCache is null || _haloBrushColor != haloColor)
+            {
+                _haloBrushCache = new SolidColorBrush(haloColor);
+                if (_haloBrushCache.CanFreeze) _haloBrushCache.Freeze();
+                _haloBrushColor = haloColor;
+            }
+            dc.DrawEllipse(_haloBrushCache, null, last, dotR * 2.0, dotR * 2.0);
             dc.DrawEllipse(Stroke, null, last, dotR, dotR);
         }
     }
 
-    private static void AppendSmoothCurve(StreamGeometryContext ctx, Point[] points)
+    private static void AppendSmoothCurve(StreamGeometryContext ctx, Point[] points, int count)
     {
-        // Cardinal-spline-style: derive control points from neighbors.
-        // For each segment (i -> i+1), use tangents of neighbouring points.
         const double tension = 0.5;
-        for (int i = 0; i < points.Length - 1; i++)
+        for (int i = 0; i < count - 1; i++)
         {
             Point p0 = i == 0 ? points[i] : points[i - 1];
             Point p1 = points[i];
             Point p2 = points[i + 1];
-            Point p3 = i + 2 < points.Length ? points[i + 2] : points[i + 1];
+            Point p3 = i + 2 < count ? points[i + 2] : points[i + 1];
 
             var c1 = new Point(
                 p1.X + (p2.X - p0.X) * tension / 3.0,
