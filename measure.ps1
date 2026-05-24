@@ -1,5 +1,5 @@
 param(
-    [string]$ExePath = "C:\Users\wcast\Desktop\resourcemonitor\dist\ResourceMonitor.exe",
+    [string]$ExePath = "C:\Users\wcast\Desktop\resourcemonitor\dist\Pulse.exe",
     [string]$Label = "current",
     [switch]$ClearCache,
     [int]$IdleSampleSeconds = 30

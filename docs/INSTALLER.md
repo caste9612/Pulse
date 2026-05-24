@@ -36,7 +36,7 @@ The **Scheduled Task with `RunLevel = Highest`** workaround:
 
 1. Installer creates a Windows Task (under Task Scheduler → `\Pulse`)
 2. Trigger: `On Logon` for the current user
-3. Action: launch `ResourceMonitor.exe`
+3. Action: launch `Pulse.exe`
 4. Setting: `Run with highest privileges` ✅
 
 Result: at every Windows login, Windows itself launches Pulse with admin token, no UAC. This is the standard trick used by HWiNFO64, ThrottleStop, MSI Afterburner, and others.
@@ -46,7 +46,7 @@ Created via the Inno Setup `[Run]` section calling `schtasks.exe`:
 ```inno
 [Run]
 Filename: "schtasks.exe"; \
-  Parameters: "/Create /TN ""Pulse"" /TR ""\""{app}\ResourceMonitor.exe\"""" /SC ONLOGON /RL HIGHEST /F"; \
+  Parameters: "/Create /TN ""Pulse"" /TR ""\""{app}\Pulse.exe\"""" /SC ONLOGON /RL HIGHEST /F"; \
   Tasks: startup_admin; Flags: runhidden
 ```
 
@@ -56,7 +56,7 @@ Removed on uninstall via `[UninstallRun]` calling `schtasks /Delete`.
 
 ```
 Setup-Pulse-X.Y.Z.exe (~6-8 MB)
-├── ResourceMonitor.exe           (~9 MB — Pulse main binary, R2R precompiled)
+├── Pulse.exe           (~9 MB — Pulse main binary, R2R precompiled)
 ├── libMonoPosixHelper.dll        (~1.5 MB — native LHM deps)
 ├── MonoPosixHelper.dll           (~0.1 MB — native LHM deps)
 ├── LICENSE

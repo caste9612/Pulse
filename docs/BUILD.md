@@ -23,7 +23,7 @@ cd ResourceMonitor
 dotnet build
 ```
 
-Output: `bin/Debug/net9.0-windows/ResourceMonitor.exe` (~150 KB, requires DLLs alongside).
+Output: `bin/Debug/net9.0-windows/Pulse.exe` (~150 KB, requires DLLs alongside).
 
 Run from VS / Rider / `dotnet run` for a debugging session.
 
@@ -40,7 +40,7 @@ Flags explained:
 - `-p:PublishSingleFile=true` — bundles managed DLLs into a single exe (native LHM DLLs stay separate)
 
 Result in `dist/`:
-- `ResourceMonitor.exe` — ~9 MB
+- `Pulse.exe` — ~9 MB
 - `libMonoPosixHelper.dll`, `MonoPosixHelper.dll` — native deps of LibreHardwareMonitorLib (~1.5 MB)
 
 `ResourceMonitor.csproj` Release config also enables:
@@ -56,7 +56,8 @@ ResourceMonitor/
 ├── MainWindow.xaml / .cs          main UI + drag/resize/persist
 │
 ├── Services/
-│   ├── MetricsService.cs          1s tick: CPU/RAM/Disk/Net via PerfCounter
+│   ├── MetricsService.cs          1s tick: CPU/RAM/Disk/Net via Win32 native
+│   ├── NativeMetrics.cs           Win32 P/Invoke (GetSystemTimes, GetIfTable2, ...)
 │   ├── HardwareMonitor.cs         2s tick: LHM wrapper (temps/clocks/watts)
 │   ├── ProcessMonitor.cs          5s tick: top processes by CPU/RAM
 │   ├── NetworkMonitor.cs          2s tick: ping, IPs, Wi-Fi
@@ -96,6 +97,7 @@ History from refactoring (Ryzen 9 7950X reference):
 | r3-no-gpu-perfctr | 5.08 | 157 | 1.35 | GPU stats via LHM only |
 | r4-r2r | 9.4 | 155 | ~2 | + ReadyToRun precompile |
 | current | 9.4 | 146-155 | 1.5-3 | + Wifi/Drive offload to background |
+| **v1.1.0 (Win32 native)** | **7.0** | **144** | **~1.5** | PerfCounter replaced with GetSystemTimes / GetIfTable2 / NtQuerySystemInformation |
 
 ## Diagnostic sensor dump
 
@@ -143,16 +145,16 @@ The workflow runs on Windows runners, calls `dotnet publish` + `iscc.exe`, and u
 
 ## Debugging the installed instance
 
-After install, the exe lives at `%LocalAppData%\Programs\Pulse\ResourceMonitor.exe` (or `%ProgramFiles%\Pulse\` if installed system-wide).
+After install, the exe lives at `%LocalAppData%\Programs\Pulse\Pulse.exe` (or `%ProgramFiles%\Pulse\` if installed system-wide).
 
 To attach a debugger:
 
 1. Launch the installed Pulse (or start with `--no-tray` from a console for stdout)
-2. In Visual Studio: Debug → Attach to Process → ResourceMonitor.exe
+2. In Visual Studio: Debug → Attach to Process → Pulse.exe
 
 Settings + logs paths:
 
-- Settings: `%APPDATA%\ResourceMonitor\settings.json`
+- Settings: `%APPDATA%\Pulse\settings.json` (migrated from `%APPDATA%\ResourceMonitor` if exists)
 - Perf log: `%TEMP%\pulse-perf.log`
 - Sensor dump (if enabled): `%TEMP%\pulse-sensors.txt`
 

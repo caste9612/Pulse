@@ -38,7 +38,7 @@ The "admin via Scheduled Task" option creates a Windows scheduled task that runs
 
 ### Option B — Portable build
 
-Grab `Pulse-vX.Y.Z-portable.zip` from Releases, extract anywhere, and run `ResourceMonitor.exe`. Settings are stored in `%APPDATA%\ResourceMonitor\settings.json`.
+Grab `Pulse-vX.Y.Z-portable.zip` from Releases, extract anywhere, and run `Pulse.exe`. Settings are stored in `%APPDATA%\Pulse\settings.json`.
 
 ## Hardware requirements
 
@@ -75,7 +75,7 @@ cd Pulse/ResourceMonitor
 dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o ../dist
 ```
 
-Output: `dist/ResourceMonitor.exe` (~9 MB, with ReadyToRun precompiled).
+Output: `dist/Pulse.exe` (~7 MB, with ReadyToRun precompiled).
 
 ## Architecture
 
