@@ -24,6 +24,16 @@
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
   </ItemGroup>
 
+  <PropertyGroup>
+    <!-- Reticle, la libreria UI: in locale il repository affiancato a questo (Reticle accanto a Pulse); la CI lo scarica
+         al tag dichiarato in .github/workflows/release.yml e passa -p:ReticleDir -->
+    <ReticleDir Condition="'$(ReticleDir)' == ''">$(MSBuildThisFileDirectory)..\..\Reticle</ReticleDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(ReticleDir)\src\Reticle.Wpf\Reticle.Wpf.csproj" />
+  </ItemGroup>
+
   <ItemGroup>
     <Resource Include="Resources\app.ico" Condition="Exists('Resources\app.ico')" />
   </ItemGroup>

@@ -55,6 +55,7 @@ Name: "desktopicon"; Description: "{cm:DesktopIconTask}"; GroupDescription: "{cm
 Source: "..\dist\Pulse.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docs\HARDWARE-SUPPORT.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 

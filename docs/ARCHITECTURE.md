@@ -6,7 +6,7 @@ How Pulse is structured under the hood.
 
 ```
                          ┌─────────────────────────────────────┐
-                         │  MainWindow (WPF, transparent)      │
+                         │  MainWindow (ReticleWindow, Mica)   │
                          │                                     │
                          │  ┌──────────────────┐               │
                          │  │  Sparkline x5    │  ◄── values   │
@@ -102,6 +102,16 @@ Single JSON file at `%APPDATA%\ResourceMonitor\settings.json`:
 ```
 
 Saved on `LocationChanged`, `SizeChanged`, on close, and on toggle of tray menu options.
+
+## UI: Reticle
+
+From v1.2.0 the widget is built on Reticle, the author's WPF design system (tag `v0.5.0`, see `RETICLE_REF` in the release workflow):
+
+- `App.xaml` merges `ReticleTheme` (the app defaults: dark, green accent, Mica, compact) and `ReticleControls`; `App.OnStartup` loads the user's choices with `ThemeManager.Initialize(new JsonThemeSettingsStore("Pulse"))`, i.e. `%LOCALAPPDATA%\Pulse\reticle-theme.json`.
+- `MainWindow` is a `ReticleWindow` without caption bar (`ShowCaption="False"`) that hosts a `TickBorder` frame: the widget pattern of Reticle. No `AllowsTransparency`, no `DropShadowEffect`: the transparency is the Windows 11 backdrop (Mica by default, Acrylic or opaque from *Aspetto...*), composed by DWM instead of copied back from the GPU on every update.
+- The tray menu switches the theme (*Tema*); *Aspetto...* opens Reticle's `AppearanceSettingsView`. Every change is applied live and saved.
+- Series colours: CPU, GPU, NET and DSK use the theme tones (info, success, warning, danger); RAM violet and temperature amber are fixed categories, with darker shades on the light theme (`MainWindow.UpdateSeriesBrushes`).
+- Reticle's animations and timers run only while the widget is on screen, so a widget hidden in the tray costs nothing on the UI side.
 
 ## Why WPF + WinForms tray icon
 

@@ -5,6 +5,29 @@ All notable changes to Pulse will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - planned as v1.2.0
+
+### Changed
+- **New look: the Reticle UI** (the author's WPF design system, v0.5.0): widget frame, Barlow / Barlow Condensed / Chakra Petch typography, dotted grid under the sparklines, *Top CPU* and *Top RAM* as framed panels, tabular digits so live values never shift their row.
+- **No more layered transparent window**: `AllowsTransparency` and the blurred drop shadow are gone (each update redrew the shadow over the whole window and copied it back from the GPU). The window uses the Windows 11 Mica backdrop instead; Acrylic and opaque are one click away.
+- Tray menu and process context menu follow the theme instead of hard-coded colours.
+- CPU / GPU / NET / DSK series colours come from the theme tones; RAM violet and temperature amber stay fixed and get darker shades on the light theme.
+
+### Added
+- **Theme from the tray menu**: *Tema* → Scuro / Chiaro / Come Windows.
+- **Appearance window** (*Aspetto...* in the tray menu, or `--aspetto` at startup): accent colour, theme, transparency, fill and density, applied live and saved in `%LOCALAPPDATA%\Pulse\reticle-theme.json`.
+- `licenses/`: the SIL Open Font License 1.1 of the embedded fonts, installed next to `Pulse.exe` and shipped in the portable zip.
+
+### Performance (Ryzen 9 7950X reference, PC idle, same 622 × 502 window, v1.1.0 vs v1.2.0 alternated in two 45 s rounds, not elevated)
+- CPU with the widget visible: 5.8% → **4.9%** of one core; hidden in the tray: 4.8% → **4.4%**
+- GPU (3D engine): 0.21% → **0.09%**; dedicated video memory: 34 → **17 MB**
+- Private memory: 145 → **130 MB**; working set: 200 → 211 MB
+- Cold start: ~506 → ~540 ms
+- Exe size: 7.0 → 10.3 MB (embedded fonts)
+
+### Build
+- The build needs the Reticle repository next to Pulse (`../Reticle`), or `-p:ReticleDir=<path>`. The release workflow checks out the Reticle tag in `RETICLE_REF` with the `RETICLE_TOKEN` secret (read-only).
+
 ## [v1.1.0] - 2026-05-24
 
 ### Added

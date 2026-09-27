@@ -11,7 +11,7 @@ using ResourceMonitor.Services;
 
 namespace ResourceMonitor;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Reticle.Wpf.ReticleWindow
 {
     private readonly MetricsService _metrics;
     private readonly HardwareMonitor _hw;
@@ -34,6 +34,8 @@ public partial class MainWindow : Window
                       NetworkMonitor net, DriveMonitor drive, AppSettings settings)
     {
         InitializeComponent();
+        UpdateSeriesBrushes();
+        Reticle.Wpf.ThemeManager.Current.Changed += (_, _) => UpdateSeriesBrushes();
         _metrics = metrics;
         _hw = hw;
         _proc = proc;
@@ -57,6 +59,22 @@ public partial class MainWindow : Window
         Closing += OnClosing;
         SizeChanged += (_, _) => { if (_settingsLoaded) SaveGeometry(); };
         LocationChanged += (_, _) => { if (_settingsLoaded) SaveGeometry(); };
+    }
+
+    // colori di serie fissi (RAM viola, temperature ambra): categorie, non stati, quindi non vengono dal tema; sul chiaro
+    // quelli del tema scuro si leggono poco e passano a tonalità più scure. CPU, GPU, NET e DSK seguono già i toni del tema.
+    private void UpdateSeriesBrushes()
+    {
+        bool light = Reticle.Wpf.ThemeManager.Current.Palette.IsLight;
+        Resources["RamBrush"] = Frozen(light ? System.Windows.Media.Color.FromRgb(0x7C, 0x3A, 0xED) : System.Windows.Media.Color.FromRgb(0xB9, 0x87, 0xF7));
+        Resources["TempBrush"] = Frozen(light ? System.Windows.Media.Color.FromRgb(0xC2, 0x41, 0x0C) : System.Windows.Media.Color.FromRgb(0xFF, 0x8A, 0x1F));
+    }
+
+    private static System.Windows.Media.SolidColorBrush Frozen(System.Windows.Media.Color color)
+    {
+        var brush = new System.Windows.Media.SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -348,18 +366,15 @@ public partial class MainWindow : Window
 
     public void UpdatePinGlyph()
     {
+        // pin acceso con l'accento, spento in text.muted; i brush seguono il tema dal vivo
         if (Topmost)
         {
-            PinButton.Content = "";
-            PinButton.Foreground = (System.Windows.Media.Brush)FindResource("CpuBrush");
-            PinButton.Opacity = 1.0;
+            PinButton.SetResourceReference(ForegroundProperty, "Reticle.Brush.Accent");
             PinButton.ToolTip = "Sempre in primo piano: ON (clicca per disattivare)";
         }
         else
         {
-            PinButton.Content = "";
-            PinButton.Foreground = (System.Windows.Media.Brush)FindResource("SubtleBrush");
-            PinButton.Opacity = 0.85;
+            PinButton.SetResourceReference(ForegroundProperty, "Reticle.Brush.Text.Muted");
             PinButton.ToolTip = "Sempre in primo piano: OFF (clicca per attivare)";
         }
     }

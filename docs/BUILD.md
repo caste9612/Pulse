@@ -6,15 +6,21 @@ How to build Pulse from source.
 
 - Windows 10 / 11
 - .NET 9 SDK ([download](https://dotnet.microsoft.com/download/dotnet/9.0))
+- Access to the Reticle repository (the author's WPF design system, private for now): from v1.2.0 Pulse builds against it
 - (Optional) Inno Setup 6+ to build the installer ([download](https://jrsoftware.org/isdl.php) or `winget install JRSoftware.InnoSetup`)
 - (Optional) Visual Studio 2022/2026 or VS Code with C# extension
 
 ## Clone
 
+Clone Reticle next to Pulse, at the tag the release workflow uses (`RETICLE_REF` in `.github/workflows/release.yml`):
+
 ```bash
-git clone https://github.com/<user>/pulse
-cd pulse
+git clone https://github.com/caste9612/Pulse
+git clone --branch v0.5.0 https://github.com/caste9612/Reticle
+cd Pulse
 ```
+
+`ResourceMonitor.csproj` references `../Reticle/src/Reticle.Wpf/Reticle.Wpf.csproj`. To use another folder, pass `-p:ReticleDir=<path to the Reticle checkout>` to `dotnet build` / `dotnet publish`.
 
 ## Debug build
 
@@ -40,7 +46,7 @@ Flags explained:
 - `-p:PublishSingleFile=true` — bundles managed DLLs into a single exe (native LHM DLLs stay separate)
 
 Result in `dist/`:
-- `Pulse.exe` — ~9 MB
+- `Pulse.exe` — ~10 MB (includes Reticle and its fonts)
 - `libMonoPosixHelper.dll`, `MonoPosixHelper.dll` — native deps of LibreHardwareMonitorLib (~1.5 MB)
 
 `ResourceMonitor.csproj` Release config also enables:
@@ -52,8 +58,11 @@ Result in `dist/`:
 ```
 ResourceMonitor/
 ├── ResourceMonitor.csproj         project file
-├── App.xaml / App.xaml.cs         entry point + tray icon
-├── MainWindow.xaml / .cs          main UI + drag/resize/persist
+├── App.xaml / App.xaml.cs         entry point + tray icon + Reticle theme (ReticleTheme, ThemeManager)
+├── MainWindow.xaml / .cs          main UI (ReticleWindow, widget pattern) + drag/resize/persist
+│
+├── Views/
+│   └── AppearanceWindow.xaml      Reticle appearance page (accent, theme, transparency, fill, density)
 │
 ├── Services/
 │   ├── MetricsService.cs          1s tick: CPU/RAM/Disk/Net via Win32 native
@@ -143,6 +152,8 @@ git push origin v1.0.0
 
 The workflow runs on Windows runners, calls `dotnet publish` + `iscc.exe`, and uploads both `Setup-Pulse-vX.Y.Z.exe` and `Pulse-vX.Y.Z-portable.zip` to a draft GitHub Release.
 
+It first checks out Reticle at `RETICLE_REF` into `reticle/` and passes it with `-p:ReticleDir`. That needs the repository secret `RETICLE_TOKEN`: a fine-grained personal access token limited to the Reticle repository, with *Contents: read-only*. Running the workflow by hand (*Actions → Build & Release → Run workflow*) builds the installer and the portable zip as artifacts without creating a release, which is how a branch gets tested.
+
 ## Debugging the installed instance
 
 After install, the exe lives at `%LocalAppData%\Programs\Pulse\Pulse.exe` (or `%ProgramFiles%\Pulse\` if installed system-wide).
@@ -155,6 +166,7 @@ To attach a debugger:
 Settings + logs paths:
 
 - Settings: `%APPDATA%\Pulse\settings.json` (migrated from `%APPDATA%\ResourceMonitor` if exists)
+- Appearance (theme, accent, transparency, fill, density): `%LOCALAPPDATA%\Pulse\reticle-theme.json`
 - Perf log: `%TEMP%\pulse-perf.log`
 - Sensor dump (if enabled): `%TEMP%\pulse-sensors.txt`
 

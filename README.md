@@ -31,8 +31,23 @@ Pulse was built with obsessive focus on minimising its own footprint. After seve
 | **Handles** | ~850 | Stable, no leak |
 | **Threads** | ~20 | Stable |
 | **RAM growth over 2 min** | ~0 MB | No leaks measured |
-| **Single-file exe** | 7 MB | + 1.5 MB of native LHM dependencies |
+| **Single-file exe** | 7 MB (10.3 MB from v1.2.0) | + 1.5 MB of native LHM dependencies; v1.2.0 embeds the Reticle UI library and its fonts |
 | **Installer** | 4.4 MB | + portable zip 3.7 MB |
+
+The table was measured on v1.1.0. For v1.2.0 see below.
+
+### v1.2.0: the Reticle UI
+
+v1.2.0 moves the widget to Reticle, the author's WPF design system, and drops the old layered transparent window (`AllowsTransparency`) with a blurred drop shadow: every update redrew the shadow over the whole window and copied the window back from the GPU. The window is now a regular one with the Windows 11 Mica backdrop. Measured with the PC idle, same 622 × 502 window, v1.1.0 against v1.2.0 alternated in two 45 s rounds (not elevated, so the figures are not comparable with the table above, only with each other):
+
+| Metric | v1.1.0 | v1.2.0 |
+|---|---|---|
+| CPU, widget visible | 5.8% of one core | **4.9%** |
+| CPU, widget hidden in the tray | 4.8% | **4.4%** |
+| GPU (3D engine) | 0.21% | **0.09%** |
+| Dedicated video memory | 34 MB | **17 MB** |
+| Private memory / working set | 145 / 200 MB | 130 / 211 MB |
+| Cold start (message loop ready) | ~506 ms | ~540 ms |
 
 ### How we got here (the things that matter)
 
@@ -55,7 +70,7 @@ A full performance log lives in `%TEMP%\pulse-perf.log`: any tick that exceeds 5
 - **Disk**: total ↓/↑ throughput, per-drive free space + bar, SSD temp (when LHM Storage is enabled)
 - **Top processes**: top 6 by CPU and by RAM, updated every 5 s. Right-click on a process for: *Apri cartella file* · *Proprietà file* · *Termina processo* · *Cerca online*
 - **System**: uptime, estimated total PC power draw (W)
-- **Themed**: dark semi-transparent, rounded corners, smooth Bezier sparklines, animated last-value dot, custom drag/resize, always-on-top toggle
+- **Themed** with the Reticle UI (from v1.2.0): dark, light or follow Windows from the tray menu; accent colour, Mica transparency, fill and density from *Aspetto...*; smooth Bezier sparklines on a dotted grid, tabular digits so live values never shift the row, custom drag/resize, always-on-top toggle
 
 ## Running as administrator (important)
 
@@ -106,7 +121,7 @@ Grab `Pulse-vX.Y.Z-portable.zip` from Releases, extract anywhere, and run `Pulse
 
 ## Hardware requirements
 
-- Windows 10 / 11 (x64)
+- Windows 10 / 11 (x64); the Mica and Acrylic transparency needs Windows 11 22H2 or later (elsewhere the widget is opaque)
 - .NET 9 Desktop Runtime ([download](https://dotnet.microsoft.com/download/dotnet/9.0))
 
 Optional, to unlock CPU temperature / power:
@@ -122,6 +137,8 @@ Optional, to unlock CPU temperature / power:
 Right-click the tray icon (near the clock) for:
 
 - Mostra / Nascondi — toggle widget visibility
+- Tema — Scuro / Chiaro / Come Windows (dark, light, follow Windows)
+- Aspetto... — accent colour, transparency, fill and density, applied live
 - Sempre in primo piano — always-on-top pin toggle
 - Avvia con Windows — autostart (regular user privileges)
 - Riavvia come amministratore — re-launch elevated, enables MSR sensors (only shown when not already admin)
@@ -143,7 +160,7 @@ cd Pulse/ResourceMonitor
 dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o ../dist
 ```
 
-Output: `dist/Pulse.exe` (~7 MB, with ReadyToRun precompiled).
+Output: `dist/Pulse.exe` (~10 MB, with ReadyToRun precompiled). From v1.2.0 the build needs the Reticle UI library checked out next to Pulse (`../Reticle`); Reticle is a private repository for now, see [`docs/BUILD.md`](docs/BUILD.md).
 
 ## Architecture
 

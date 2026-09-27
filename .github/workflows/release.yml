@@ -11,6 +11,9 @@ on:
         required: false
         default: '0.0.0-dev'
 
+env:
+  RETICLE_REF: v0.5.0
+
 jobs:
   build:
     runs-on: windows-latest
@@ -20,6 +23,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Reticle, the author's UI library (private repository): the tag Pulse is built on, read with a read-only token
+      - name: Checkout Reticle
+        uses: actions/checkout@v4
+        with:
+          repository: caste9612/Reticle
+          ref: ${{ env.RETICLE_REF }}
+          token: ${{ secrets.RETICLE_TOKEN }}
+          path: reticle
 
       - name: Resolve version
         id: ver
@@ -47,6 +59,7 @@ jobs:
             --self-contained false `
             -p:PublishSingleFile=true `
             -p:Version=${{ steps.ver.outputs.version }} `
+            -p:ReticleDir="${{ github.workspace }}\reticle" `
             -o dist
 
       - name: Patch installer version
@@ -87,6 +100,7 @@ jobs:
           New-Item -ItemType Directory -Force $outDir | Out-Null
           Copy-Item dist/* $outDir/
           Copy-Item README.md, LICENSE $outDir/
+          Copy-Item licenses $outDir/ -Recurse
           Compress-Archive -Path "$outDir\*" -DestinationPath "Pulse-v${{ steps.ver.outputs.version }}-portable.zip" -Force
           Get-ChildItem *.zip
 
