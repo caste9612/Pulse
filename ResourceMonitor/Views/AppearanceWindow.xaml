@@ -1,0 +1,12 @@
+<rt:ReticleWindow x:Class="ResourceMonitor.Views.AppearanceWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:rt="http://schemas.reticle.dev/wpf"
+        Title="Aspetto · Pulse"
+        Width="760" Height="680" MinWidth="560" MinHeight="420"
+        WindowStartupLocation="CenterScreen">
+    <!-- la pagina Aspetto della libreria: accento, tema, trasparenza, riempimento e densità cambiano dal vivo anche il widget -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <rt:AppearanceSettingsView />
+    </ScrollViewer>
+</rt:ReticleWindow>

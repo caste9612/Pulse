@@ -9,12 +9,24 @@ How to build Pulse from source.
 - (Optional) Inno Setup 6+ to build the installer ([download](https://jrsoftware.org/isdl.php) or `winget install JRSoftware.InnoSetup`)
 - (Optional) Visual Studio 2022/2026 or VS Code with C# extension
 
+The Reticle UI library (the author's WPF design system, v1.2.0 onwards) ships as two DLLs in `lib/Reticle`, so nothing else is needed to build.
+
 ## Clone
 
 ```bash
-git clone https://github.com/<user>/pulse
-cd pulse
+git clone https://github.com/caste9612/Pulse
+cd Pulse
 ```
+
+## Updating Reticle
+
+`lib/Reticle/README.md` says which Reticle tag the DLLs come from. To move to another tag, with the Reticle repository cloned next to Pulse (`../Reticle`):
+
+```powershell
+./scripts/update-reticle.ps1 -Tag v0.5.0
+```
+
+It builds Reticle at that tag in a temporary worktree, copies `Reticle.Wpf.dll` and `Reticle.Tokens.dll` into `lib/Reticle` and updates the version line of its README.
 
 ## Debug build
 
@@ -40,7 +52,7 @@ Flags explained:
 - `-p:PublishSingleFile=true` — bundles managed DLLs into a single exe (native LHM DLLs stay separate)
 
 Result in `dist/`:
-- `Pulse.exe` — ~9 MB
+- `Pulse.exe` — ~10 MB (includes Reticle and its fonts)
 - `libMonoPosixHelper.dll`, `MonoPosixHelper.dll` — native deps of LibreHardwareMonitorLib (~1.5 MB)
 
 `ResourceMonitor.csproj` Release config also enables:
@@ -52,8 +64,11 @@ Result in `dist/`:
 ```
 ResourceMonitor/
 ├── ResourceMonitor.csproj         project file
-├── App.xaml / App.xaml.cs         entry point + tray icon
-├── MainWindow.xaml / .cs          main UI + drag/resize/persist
+├── App.xaml / App.xaml.cs         entry point + tray icon + Reticle theme (ReticleTheme, ThemeManager)
+├── MainWindow.xaml / .cs          main UI (ReticleWindow, widget pattern) + drag/resize/persist
+│
+├── Views/
+│   └── AppearanceWindow.xaml      Reticle appearance page (accent, theme, transparency, fill, density)
 │
 ├── Services/
 │   ├── MetricsService.cs          1s tick: CPU/RAM/Disk/Net via Win32 native
@@ -143,6 +158,8 @@ git push origin v1.0.0
 
 The workflow runs on Windows runners, calls `dotnet publish` + `iscc.exe`, and uploads both `Setup-Pulse-vX.Y.Z.exe` and `Pulse-vX.Y.Z-portable.zip` to a draft GitHub Release.
 
+Running the workflow by hand (*Actions → Build & Release → Run workflow*) builds the installer and the portable zip as artifacts without creating a release, which is how a branch gets tested.
+
 ## Debugging the installed instance
 
 After install, the exe lives at `%LocalAppData%\Programs\Pulse\Pulse.exe` (or `%ProgramFiles%\Pulse\` if installed system-wide).
@@ -155,6 +172,7 @@ To attach a debugger:
 Settings + logs paths:
 
 - Settings: `%APPDATA%\Pulse\settings.json` (migrated from `%APPDATA%\ResourceMonitor` if exists)
+- Appearance (theme, accent, transparency, fill, density): `%LOCALAPPDATA%\Pulse\reticle-theme.json`
 - Perf log: `%TEMP%\pulse-perf.log`
 - Sensor dump (if enabled): `%TEMP%\pulse-sensors.txt`
 

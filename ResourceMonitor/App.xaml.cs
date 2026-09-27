@@ -33,6 +33,9 @@ public partial class App : Application
             return;
         }
 
+        // tema e impostazioni Aspetto di Reticle, salvati in %LocalAppData%\Pulse\reticle-theme.json
+        Reticle.Wpf.ThemeManager.Current.Initialize(new Reticle.Wpf.JsonThemeSettingsStore("Pulse"));
+
         _settings = SettingsService.Load();
         _metrics = new MetricsService();
         _hw = new HardwareMonitor();
@@ -46,6 +49,17 @@ public partial class App : Application
             _window.Show();
 
         BuildTrayIcon();
+        if (Array.IndexOf(e.Args, "--aspetto") >= 0) ShowAppearance();
+    }
+
+    private Views.AppearanceWindow? _appearance;
+
+    private void ShowAppearance()
+    {
+        if (_appearance is not null) { _appearance.Activate(); return; }
+        _appearance = new Views.AppearanceWindow();
+        _appearance.Closed += (_, _) => _appearance = null;
+        _appearance.Show();
     }
 
     private void BuildTrayIcon()
@@ -91,7 +105,27 @@ public partial class App : Application
             if (_settings != null) { _settings.AutoStart = _autoStartItem.IsChecked; SettingsService.Save(_settings); }
         };
 
+        var appearanceItem = new MenuItem { Header = "Aspetto..." };
+        appearanceItem.Click += (_, _) => ShowAppearance();
+
+        // tema scuro, chiaro o come Windows, a un clic dal tray; resta salvato con le altre impostazioni Aspetto
+        var themeItem = new MenuItem { Header = "Tema" };
+        var themes = new[] { ("Scuro", Reticle.Wpf.ThemeVariant.Dark), ("Chiaro", Reticle.Wpf.ThemeVariant.Light), ("Come Windows", Reticle.Wpf.ThemeVariant.System) };
+        foreach (var (label, variant) in themes)
+        {
+            var item = new MenuItem { Header = label, IsCheckable = true, IsChecked = Reticle.Wpf.ThemeManager.Current.Settings.Theme == variant };
+            item.Click += (_, _) =>
+            {
+                var theme = Reticle.Wpf.ThemeManager.Current;
+                theme.Apply(theme.Settings with { Theme = variant });
+                theme.Save();
+            };
+            themeItem.Items.Add(item);
+        }
+
         menu.Items.Add(showItem);
+        menu.Items.Add(themeItem);
+        menu.Items.Add(appearanceItem);
         menu.Items.Add(_pinItem);
         menu.Items.Add(_autoStartItem);
 

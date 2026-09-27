@@ -136,14 +136,7 @@ public sealed class TrayIcon : IDisposable
     private void ShowMenu()
     {
         if (BuildMenu is null) return;
-        _contextMenu ??= new ContextMenu
-        {
-            Background = new SolidColorBrush(Color.FromArgb(0xF0, 0x1E, 0x1E, 0x26)),
-            Foreground = new SolidColorBrush(Color.FromArgb(0xFF, 0xF5, 0xF5, 0xF7)),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)),
-            BorderThickness = new Thickness(1),
-            Padding = new Thickness(2)
-        };
+        _contextMenu ??= new ContextMenu();   // stile implicito del tema Reticle
         _contextMenu.Items.Clear();
         BuildMenu.Invoke(_contextMenu);
 

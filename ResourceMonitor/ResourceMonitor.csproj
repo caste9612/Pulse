@@ -25,6 +25,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Reticle, la libreria UI, dalle DLL del tag in lib/Reticle (versione in lib/Reticle/README.md): Pulse si compila ovunque,
+         CI compresa, senza accesso al repository privato di Reticle. Si aggiornano con scripts/update-reticle.ps1 -->
+    <Reference Include="Reticle.Wpf">
+      <HintPath>..\lib\Reticle\Reticle.Wpf.dll</HintPath>
+    </Reference>
+    <Reference Include="Reticle.Tokens">
+      <HintPath>..\lib\Reticle\Reticle.Tokens.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
     <Resource Include="Resources\app.ico" Condition="Exists('Resources\app.ico')" />
   </ItemGroup>
 
