@@ -22,11 +22,11 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Reticle, the author's UI library (private repository): the tag Pulse is built on, read with a read-only token
       - name: Checkout Reticle
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: caste9612/Reticle
           ref: ${{ env.RETICLE_REF }}
@@ -46,7 +46,7 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Setup .NET 9
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '9.0.x'
 
@@ -105,13 +105,13 @@ jobs:
           Get-ChildItem *.zip
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: installer
           path: installer/Output/*.exe
 
       - name: Upload portable artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: portable
           path: '*.zip'
