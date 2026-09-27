@@ -105,7 +105,7 @@ Saved on `LocationChanged`, `SizeChanged`, on close, and on toggle of tray menu 
 
 ## UI: Reticle
 
-From v1.2.0 the widget is built on Reticle, the author's WPF design system (tag `v0.5.0`, see `RETICLE_REF` in the release workflow):
+From v1.2.0 the widget is built on Reticle, the author's WPF design system (v0.5.0, as the two DLLs in `lib/Reticle`, updated with `scripts/update-reticle.ps1`):
 
 - `App.xaml` merges `ReticleTheme` (the app defaults: dark, green accent, Mica, compact) and `ReticleControls`; `App.OnStartup` loads the user's choices with `ThemeManager.Initialize(new JsonThemeSettingsStore("Pulse"))`, i.e. `%LOCALAPPDATA%\Pulse\reticle-theme.json`.
 - `MainWindow` is a `ReticleWindow` without caption bar (`ShowCaption="False"`) that hosts a `TickBorder` frame: the widget pattern of Reticle. No `AllowsTransparency`, no `DropShadowEffect`: the transparency is the Windows 11 backdrop (Mica by default, Acrylic or opaque from *Aspetto...*), composed by DWM instead of copied back from the GPU on every update.

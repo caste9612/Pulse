@@ -11,9 +11,6 @@ on:
         required: false
         default: '0.0.0-dev'
 
-env:
-  RETICLE_REF: v0.5.0
-
 jobs:
   build:
     runs-on: windows-latest
@@ -23,15 +20,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      # Reticle, the author's UI library (private repository): the tag Pulse is built on, read with a read-only token
-      - name: Checkout Reticle
-        uses: actions/checkout@v7
-        with:
-          repository: caste9612/Reticle
-          ref: ${{ env.RETICLE_REF }}
-          token: ${{ secrets.RETICLE_TOKEN }}
-          path: reticle
 
       - name: Resolve version
         id: ver
@@ -59,7 +47,6 @@ jobs:
             --self-contained false `
             -p:PublishSingleFile=true `
             -p:Version=${{ steps.ver.outputs.version }} `
-            -p:ReticleDir="${{ github.workspace }}\reticle" `
             -o dist
 
       - name: Patch installer version

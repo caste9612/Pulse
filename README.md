@@ -160,14 +160,14 @@ cd Pulse/ResourceMonitor
 dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o ../dist
 ```
 
-Output: `dist/Pulse.exe` (~10 MB, with ReadyToRun precompiled). From v1.2.0 the build needs the Reticle UI library checked out next to Pulse (`../Reticle`); Reticle is a private repository for now, see [`docs/BUILD.md`](docs/BUILD.md).
+Output: `dist/Pulse.exe` (~10 MB, with ReadyToRun precompiled). The Reticle UI library ships as DLLs in `lib/Reticle`, so the clone builds as is.
 
 ## Architecture
 
 WPF UI on top of background services polling at staggered intervals. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ```
-MainWindow (WPF, transparent borderless)
+MainWindow (WPF + Reticle UI, Mica backdrop)
    │
    ├── MetricsService    (1 s : CPU/RAM/Disk/Net via Win32 native)
    ├── NativeMetrics     (P/Invoke: GetSystemTimes, GetIfTable2, ...)

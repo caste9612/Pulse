@@ -35,6 +35,3 @@ packages/
 # Resharper
 _ReSharper*/
 *.DotSettings.user
-
-# Reticle checked out by CI (release.yml)
-reticle/

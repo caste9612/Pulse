@@ -6,21 +6,27 @@ How to build Pulse from source.
 
 - Windows 10 / 11
 - .NET 9 SDK ([download](https://dotnet.microsoft.com/download/dotnet/9.0))
-- Access to the Reticle repository (the author's WPF design system, private for now): from v1.2.0 Pulse builds against it
 - (Optional) Inno Setup 6+ to build the installer ([download](https://jrsoftware.org/isdl.php) or `winget install JRSoftware.InnoSetup`)
 - (Optional) Visual Studio 2022/2026 or VS Code with C# extension
 
-## Clone
+The Reticle UI library (the author's WPF design system, v1.2.0 onwards) ships as two DLLs in `lib/Reticle`, so nothing else is needed to build.
 
-Clone Reticle next to Pulse, at the tag the release workflow uses (`RETICLE_REF` in `.github/workflows/release.yml`):
+## Clone
 
 ```bash
 git clone https://github.com/caste9612/Pulse
-git clone --branch v0.5.0 https://github.com/caste9612/Reticle
 cd Pulse
 ```
 
-`ResourceMonitor.csproj` references `../Reticle/src/Reticle.Wpf/Reticle.Wpf.csproj`. To use another folder, pass `-p:ReticleDir=<path to the Reticle checkout>` to `dotnet build` / `dotnet publish`.
+## Updating Reticle
+
+`lib/Reticle/README.md` says which Reticle tag the DLLs come from. To move to another tag, with the Reticle repository cloned next to Pulse (`../Reticle`):
+
+```powershell
+./scripts/update-reticle.ps1 -Tag v0.5.0
+```
+
+It builds Reticle at that tag in a temporary worktree, copies `Reticle.Wpf.dll` and `Reticle.Tokens.dll` into `lib/Reticle` and updates the version line of its README.
 
 ## Debug build
 
@@ -152,7 +158,7 @@ git push origin v1.0.0
 
 The workflow runs on Windows runners, calls `dotnet publish` + `iscc.exe`, and uploads both `Setup-Pulse-vX.Y.Z.exe` and `Pulse-vX.Y.Z-portable.zip` to a draft GitHub Release.
 
-It first checks out Reticle at `RETICLE_REF` into `reticle/` and passes it with `-p:ReticleDir`. That needs the repository secret `RETICLE_TOKEN`: a fine-grained personal access token limited to the Reticle repository, with *Contents: read-only*. Running the workflow by hand (*Actions → Build & Release → Run workflow*) builds the installer and the portable zip as artifacts without creating a release, which is how a branch gets tested.
+Running the workflow by hand (*Actions → Build & Release → Run workflow*) builds the installer and the portable zip as artifacts without creating a release, which is how a branch gets tested.
 
 ## Debugging the installed instance
 

@@ -26,7 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exe size: 7.0 → 10.3 MB (embedded fonts)
 
 ### Build
-- The build needs the Reticle repository next to Pulse (`../Reticle`), or `-p:ReticleDir=<path>`. The release workflow checks out the Reticle tag in `RETICLE_REF` with the `RETICLE_TOKEN` secret (read-only).
+- Reticle ships as two DLLs in `lib/Reticle` (v0.5.0), updated with `scripts/update-reticle.ps1 -Tag <tag>`: Pulse builds anywhere, CI included, with no access to the private Reticle repository.
+- Release workflow: actions on Node 24 (checkout v7, setup-dotnet v6, upload-artifact v7).
 
 ## [v1.1.0] - 2026-05-24
 

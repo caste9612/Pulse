@@ -24,14 +24,15 @@
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
   </ItemGroup>
 
-  <PropertyGroup>
-    <!-- Reticle, la libreria UI: in locale il repository affiancato a questo (Reticle accanto a Pulse); la CI lo scarica
-         al tag dichiarato in .github/workflows/release.yml e passa -p:ReticleDir -->
-    <ReticleDir Condition="'$(ReticleDir)' == ''">$(MSBuildThisFileDirectory)..\..\Reticle</ReticleDir>
-  </PropertyGroup>
-
   <ItemGroup>
-    <ProjectReference Include="$(ReticleDir)\src\Reticle.Wpf\Reticle.Wpf.csproj" />
+    <!-- Reticle, la libreria UI, dalle DLL del tag in lib/Reticle (versione in lib/Reticle/README.md): Pulse si compila ovunque,
+         CI compresa, senza accesso al repository privato di Reticle. Si aggiornano con scripts/update-reticle.ps1 -->
+    <Reference Include="Reticle.Wpf">
+      <HintPath>..\lib\Reticle\Reticle.Wpf.dll</HintPath>
+    </Reference>
+    <Reference Include="Reticle.Tokens">
+      <HintPath>..\lib\Reticle\Reticle.Tokens.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
