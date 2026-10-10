@@ -7,6 +7,7 @@ Which sensors work on which hardware, and why some need extra software.
 | Sensor | Source | Requires |
 |---|---|---|
 | CPU usage % | `GetSystemTimes` (Win32) | nothing |
+| Per-core load | `NtQuerySystemInformation` (`SystemProcessorPerformanceInformation`, all cores in one call); threads per physical core from `GetLogicalProcessorInformationEx`, once at startup | nothing; up to 64 logical processors (one processor group) |
 | CPU clock GHz | LibreHardwareMonitorLib per-core clocks (the highest); fallback `CallNtPowerInformation` (average current MHz) | per-core clocks: **signed kernel driver + admin**; fallback: nothing |
 | CPU temperature | LibreHardwareMonitorLib via MSR | **signed kernel driver + admin** |
 | CPU package power | LibreHardwareMonitorLib via MSR | **signed kernel driver + admin** |

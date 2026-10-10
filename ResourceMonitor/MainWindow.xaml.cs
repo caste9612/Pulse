@@ -51,6 +51,9 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         _settings = settings;
         _metrics.Updated += OnMetricsUpdated;
 
+        CoreBars.Cores = _metrics.CpuCorePhysical;
+        CpuCoresText.ToolTip = CoreBars.ToolTip = BuildCoresTooltip();
+
         _machineBoot = DateTime.Now - TimeSpan.FromMilliseconds(Environment.TickCount64);
 
         _slowTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -136,6 +139,8 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         Dispatcher.BeginInvoke(() =>
         {
             CpuValue.Text = $"{_metrics.Cpu:0.0}%";
+            CoreBars.Values = _metrics.CpuCores;
+            CpuCoresText.Text = _metrics.CpuCores.Length > 0 ? $"≈ {_metrics.CpuCoresInUse:0.0} core in uso" : "";
             RamValue.Text = $"{_metrics.RamUsedPercent:0}%";
             RamUsed.Text = $"{_metrics.RamUsedGb:0.0} / {_metrics.RamTotalGb:0.0} GB";
             GpuValue.Text = $"{_metrics.Gpu:0}%";
@@ -153,6 +158,16 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             RamDetail.Text = BuildRamDetail();
             UptimeText.Text = BuildUptime();
         });
+    }
+
+    private string BuildCoresTooltip()
+    {
+        int logical = _metrics.CpuCorePhysical.Length;
+        int physical = _metrics.CpuCorePhysical.Distinct().Count();
+        var cores = physical < logical ? $"core logici ({logical}, su {physical} core fisici)" : $"core ({logical})";
+        var bars = physical < logical ? "una barra per core logico, attaccate quelle dello stesso core fisico" : "una barra per core";
+        return $"Somma dei carichi dei {cores}: quanti core pieni vale il lavoro in corso.\n" +
+               $"Sotto il grafico {bars}: tante barre medie vogliono dire lavoro parallelo, una sola piena un thread solo.";
     }
 
     private string BuildPowerEstimate()

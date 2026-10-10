@@ -16,6 +16,10 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
 
     public double Cpu { get; private set; }
     public double[] CpuCores { get; private set; } = Array.Empty<double>();
+    /// <summary>Per ogni core logico di <see cref="CpuCores"/>, il core fisico a cui appartiene.</summary>
+    public int[] CpuCorePhysical { get; }
+    /// <summary>Quanti core pieni vale il carico: la somma dei carichi dei core logici.</summary>
+    public double CpuCoresInUse { get; private set; }
     public double GpuExternal { get; set; }
     public double VramUsedExternalGb { get; set; }
     public double RamUsedPercent { get; private set; }
@@ -58,6 +62,8 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
 
         // Prime CPU baseline (la prima chiamata ritorna 0)
         _native.GetCpuPercent();
+        // idem per i singoli core; quali core logici stanno sullo stesso core fisico non cambia, si legge una volta
+        CpuCorePhysical = NativeMetrics.GetPhysicalCores(_native.GetCoreLoads().Length);
         // Prime disk/net baselines pure (le rate richiedono 2 sample)
         _native.GetDiskRates();
         _native.GetNetworkRates();
@@ -84,6 +90,8 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
         try
         {
             Cpu = _native.GetCpuPercent();
+            CpuCores = _native.GetCoreLoads();
+            CpuCoresInUse = CpuCores.Sum() / 100;
 
             var mem = _native.GetMemory();
             RamUsedPercent = mem.UsedPercent;

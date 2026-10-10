@@ -123,6 +123,10 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <rt:TrackedText Text="CPU" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource Reticle.Brush.Info}"/>
                             <TextBlock x:Name="CpuValue" Style="{StaticResource BigValue}" Text="—"/>
@@ -133,6 +137,10 @@
                         <Border Grid.Column="1" Style="{StaticResource SparkBed}">
                             <ctrl:Sparkline x:Name="CpuSpark" Height="26" Stroke="{DynamicResource Reticle.Brush.Info}" MaxValue="100"/>
                         </Border>
+                        <!-- sotto il grafico il carico di ogni core logico, a sinistra quanti core pieni vale (ToolTip da MainWindow) -->
+                        <TextBlock x:Name="CpuCoresText" Grid.Row="1" Style="{StaticResource DimText}" Text=""/>
+                        <ctrl:CoreBars x:Name="CoreBars" Grid.Row="1" Grid.Column="1" Height="12" Margin="14,2,0,2"
+                                       Fill="{DynamicResource Reticle.Brush.Info}"/>
                     </Grid>
 
                     <Rectangle Style="{StaticResource MetricDivider}"/>
@@ -236,7 +244,8 @@
                         </ItemsControl>
                     </StackPanel>
 
-                    <rt:Ruler Margin="0,12,0,12"/>
+                    <!-- 8 sopra e sotto (erano 12), per fare posto alla riga dei core sotto la CPU senza allungare troppo il widget -->
+                    <rt:Ruler Margin="0,8,0,8"/>
 
                     <!-- TOP PROCESSES: due Panel con la legenda sulla cornice -->
                     <Grid>

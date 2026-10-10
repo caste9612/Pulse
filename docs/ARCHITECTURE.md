@@ -70,9 +70,9 @@ Performance log: ticks that exceed thresholds (50 ms metrics tick, 200 ms hardwa
 
 ## Data flow
 
-1. **MetricsService timer fires** (1 s, UI thread) → `NativeMetrics` reads the CPU times (`GetSystemTimes`), memory (`GlobalMemoryStatusEx`, `GetPerformanceInfo`), the system-wide I/O byte counters (`NtQuerySystemInformation`), the network interface table (`GetIfTable2`) and the CPU clock (`CallNtPowerInformation`). CPU % and the disk/network rates come from the delta with the previous sample.
+1. **MetricsService timer fires** (1 s, UI thread) → `NativeMetrics` reads the CPU times (`GetSystemTimes`), the times of every logical processor (`NtQuerySystemInformation`, `SystemProcessorPerformanceInformation`), memory (`GlobalMemoryStatusEx`, `GetPerformanceInfo`), the system-wide I/O byte counters (`NtQuerySystemInformation`, `SystemPerformanceInformation`), the network interface table (`GetIfTable2`) and the CPU clock (`CallNtPowerInformation`). CPU %, the per-core loads and the disk/network rates come from the delta with the previous sample. Which logical processors share a physical core is read once, at startup (`GetLogicalProcessorInformationEx`).
 2. Raises `Updated` event.
-3. `MainWindow.OnMetricsUpdated` updates TextBlocks and assigns a fresh `ToArray()` of each 60-value history to `Sparkline.Values` (triggers `OnRender`).
+3. `MainWindow.OnMetricsUpdated` updates TextBlocks, assigns a fresh `ToArray()` of each 60-value history to `Sparkline.Values` and the fresh per-core array to `CoreBars.Values` (both trigger `OnRender`).
 4. **Slow tick fires** (2 s, separate timer) → background `Task.Run(_hw.Update)` (LHM), then `_net.UpdateAsync()`, then back on the UI thread to update temp/clock/watt/IP labels.
 5. `MetricsService.GpuExternal` and `VramUsedExternalGb` are set from `HardwareMonitor` outputs so the GPU sparkline still updates on the 1s tick.
 6. **Process tick** (5 s) and **drive tick** (30 s) scan on `Task.Run`, then replace the items of the *Top CPU* / *Top RAM* panels and of the drive list.
@@ -90,6 +90,8 @@ Performance log: ticks that exceed thresholds (50 ms metrics tick, 200 ms hardwa
 The gradient and halo brushes are cached and rebuilt only when the colour changes. The dotted grid under the curve is not drawn here: it is the `Reticle.Brush.Dots` background of the hosting border (`SparkBed` in `MainWindow.xaml`).
 
 `Values` is registered with `FrameworkPropertyMetadataOptions.AffectsRender`, so any assignment re-triggers render. The MainWindow assigns a fresh `ToArray()` of each history every tick.
+
+`Controls/CoreBars.cs`, under the CPU sparkline, works the same way: one bar per logical processor from the latest sample (no history, no animation), the threads of one physical core side by side, a track in the series colour at 10 % and the fill from the bottom. Gaps and edges are rounded to device pixels, so the narrow bars stay sharp at any scale.
 
 ## State persistence
 
@@ -152,7 +154,7 @@ A named mutex `Pulse.SingleInstance` is created at startup (`ResourceMonitor.Sin
 
 Earlier iterations measured ~6.77% idle CPU. Optimizations dropped it to ~1.5%:
 
-1. **Per-core CPU counters** (16-32 PerfCounters) — we collected them but never displayed. Removed.
+1. **Per-core CPU counters** (16-32 PerfCounters) — we collected them but never displayed. Removed. The per-core bars that came later read every core with one `NtQuerySystemInformation` call per tick.
 2. **GPU Engine counter sum** (100+ instances) — replaced by single LHM read for GPU load %.
 3. **GPU Adapter Memory counter** — replaced by LHM `GPU Memory Total/Used` sensors.
 4. **NetworkMonitor.UpdateWifi sync `netsh` call** — moved to `Task.Run` (was blocking UI up to 800 ms every 8 s).

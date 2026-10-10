@@ -39,6 +39,80 @@ public sealed class NativeMetrics
         return Math.Clamp((1.0 - (double)idleDelta / totalDelta) * 100.0, 0, 100);
     }
 
+    // ===== CPU PER CORE =====
+
+    // NtQuerySystemInformation con SystemProcessorPerformanceInformation (class 8): per ogni core logico del gruppo di processori
+    // (al massimo 64) uno struct da 48 byte con IdleTime (8), KernelTime (8, idle compreso), UserTime (8), ... Una chiamata per tutti.
+    private const int CorePerfSize = 48;
+    private readonly byte[] _coreBuf = new byte[64 * CorePerfSize];
+    private long[] _prevCoreIdle = Array.Empty<long>();
+    private long[] _prevCoreTotal = Array.Empty<long>();
+
+    /// <summary>CPU usage % di ogni core logico. Prima chiamata serve come baseline (ritorna zeri).</summary>
+    public double[] GetCoreLoads()
+    {
+        int returned;
+        var handle = GCHandle.Alloc(_coreBuf, GCHandleType.Pinned);
+        try
+        {
+            if (NtQuerySystemInformation(8, handle.AddrOfPinnedObject(), _coreBuf.Length, out returned) != 0) return Array.Empty<double>();
+        }
+        finally
+        {
+            handle.Free();
+        }
+
+        int count = returned / CorePerfSize;
+        var loads = new double[count];
+        bool primed = _prevCoreIdle.Length == count;
+        if (!primed) { _prevCoreIdle = new long[count]; _prevCoreTotal = new long[count]; }
+        for (int i = 0; i < count; i++)
+        {
+            int at = i * CorePerfSize;
+            long idle = BitConverter.ToInt64(_coreBuf, at);
+            long total = BitConverter.ToInt64(_coreBuf, at + 8) + BitConverter.ToInt64(_coreBuf, at + 16);
+            long totalDelta = total - _prevCoreTotal[i];
+            if (primed && totalDelta > 0)
+                loads[i] = Math.Clamp((1.0 - (double)(idle - _prevCoreIdle[i]) / totalDelta) * 100.0, 0, 100);
+            _prevCoreIdle[i] = idle; _prevCoreTotal[i] = total;
+        }
+        return loads;
+    }
+
+    /// <summary>Per ognuno dei primi <paramref name="count"/> core logici, il core fisico a cui appartiene: i thread SMT dello stesso
+    /// core hanno lo stesso numero. Dalla topologia di GetLogicalProcessorInformationEx, che non cambia: si legge una volta.
+    /// Se la lettura fallisce ogni core logico fa core a sé.</summary>
+    public static int[] GetPhysicalCores(int count)
+    {
+        var cores = new int[count];
+        for (int i = 0; i < count; i++) cores[i] = -1 - i;
+        int length = 0;
+        GetLogicalProcessorInformationEx(RelationProcessorCore, IntPtr.Zero, ref length);
+        if (length <= 0) return cores;
+        IntPtr buf = Marshal.AllocHGlobal(length);
+        try
+        {
+            if (!GetLogicalProcessorInformationEx(RelationProcessorCore, buf, ref length)) return cores;
+            // SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX: Relationship (4), Size (4), poi PROCESSOR_RELATIONSHIP con la GROUP_AFFINITY
+            // del core a +32: Mask (8 byte, un bit per core logico) e Group (a +40). Conta il gruppo 0: fino a 64 core logici è l'unico
+            for (int offset = 0, core = 0; offset < length; core++)
+            {
+                IntPtr entry = IntPtr.Add(buf, offset);
+                int size = Marshal.ReadInt32(entry, 4);
+                if (size <= 0) break;
+                ulong mask = (ulong)Marshal.ReadInt64(entry, 32);
+                if (Marshal.ReadInt16(entry, 40) == 0)
+                {
+                    for (int bit = 0; bit < count && bit < 64; bit++)
+                        if ((mask & (1UL << bit)) != 0) cores[bit] = core;
+                }
+                offset += size;
+            }
+        }
+        finally { Marshal.FreeHGlobal(buf); }
+        return cores;
+    }
+
     // ===== MEMORY =====
 
     public struct MemoryInfo
@@ -266,6 +340,12 @@ public sealed class NativeMetrics
 
     [DllImport("ntdll.dll")]
     private static extern int NtQuerySystemInformation(int sysClass, IntPtr buf, int bufSize, out int returned);
+
+    private const int RelationProcessorCore = 0;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetLogicalProcessorInformationEx(int relationshipType, IntPtr buffer, ref int returnedLength);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MIB_IF_ROW2
