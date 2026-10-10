@@ -420,10 +420,12 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         CornerPicker.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, Reticle.Tokens.Motion.Base) { EasingFunction = ease });
         foreach (var arrow in new[] { CornerTopLeft, CornerTopRight, CornerBottomLeft, CornerBottomRight })
         {
+            // partono tutte dal centro della tessera, mezza cella più in là, e si aprono verso il proprio angolo
             var (right, bottom) = CornerOf(arrow);
+            double dx = arrow.DesiredSize.Width / 2, dy = arrow.DesiredSize.Height / 2;
             if (arrow.RenderTransform is not TranslateTransform move) arrow.RenderTransform = move = new TranslateTransform();
-            move.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(right ? -6 : 6, 0, Reticle.Tokens.Motion.Reveal) { EasingFunction = ease });
-            move.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(bottom ? -6 : 6, 0, Reticle.Tokens.Motion.Reveal) { EasingFunction = ease });
+            move.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(right ? -dx : dx, 0, Reticle.Tokens.Motion.Reveal) { EasingFunction = ease });
+            move.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(bottom ? -dy : dy, 0, Reticle.Tokens.Motion.Reveal) { EasingFunction = ease });
         }
     }
 
