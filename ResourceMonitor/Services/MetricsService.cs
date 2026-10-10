@@ -13,7 +13,11 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
 
     private readonly DispatcherTimer _timer;
     private readonly NativeMetrics _native = new();
-    private readonly CoreSampler? _sampler;
+    private readonly bool _samplingPossible;
+    private volatile CoreSampler? _sampler;
+    private volatile bool _samplingFailed;
+    private int _samplingSwitching;
+    private int[] _trackedPids = { -1, -1, -1 };
 
     public double Cpu { get; private set; }
     public double[] CpuCores { get; private set; } = Array.Empty<double>();
@@ -24,10 +28,10 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     /// <summary>Per ogni core logico, la parte del carico di ciascun processo seguito (<see cref="CoreSampler.Slots"/> valori per
     /// core, 0–1); null senza il campionamento del kernel.</summary>
     public double[]? CpuCoreShares { get; private set; }
-    /// <summary>Esito dell'avvio del campionamento: 0 attivo, -1 spento con PULSE_NO_CORE_SAMPLING, altrimenti l'errore di Windows
-    /// (5: Pulse non è da amministratore).</summary>
-    public int CoreSamplingError { get; }
-    public bool CoreSamplingActive => _sampler is not null;
+    /// <summary>Spento con PULSE_NO_CORE_SAMPLING=1.</summary>
+    public bool CoreSamplingDisabled { get; }
+    /// <summary>Il campionamento dei core si può accendere: Pulse da amministratore, non spento, nessun avvio fallito.</summary>
+    public bool CoreSamplingAvailable => _samplingPossible && !_samplingFailed;
     public double GpuExternal { get; set; }
     public double VramUsedExternalGb { get; set; }
     public double RamUsedPercent { get; private set; }
@@ -72,13 +76,11 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
         _native.GetCpuPercent();
         // idem per i singoli core; quali core logici stanno sullo stesso core fisico non cambia, si legge una volta
         CpuCorePhysical = NativeMetrics.GetPhysicalCores(_native.GetCoreLoads().Length);
-        // quale processo gira su quale core: solo da amministratore (vedi CoreSampler)
-        if (Environment.GetEnvironmentVariable("PULSE_NO_CORE_SAMPLING") == "1") CoreSamplingError = -1;
-        else
-        {
-            _sampler = CoreSampler.TryStart(CpuCorePhysical.Length, out int error);
-            CoreSamplingError = error;
-        }
+        // quale processo gira su quale core: solo da amministratore, e acceso solo quando c'è un processo da seguire
+        // (SetCoreSampling, vedi CoreSampler)
+        CoreSamplingDisabled = Environment.GetEnvironmentVariable("PULSE_NO_CORE_SAMPLING") == "1";
+        _samplingPossible = !CoreSamplingDisabled && CoreSampler.CanRun();
+        if (_samplingPossible) CoreSampler.StopOrphan();
         // Prime disk/net baselines pure (le rate richiedono 2 sample)
         _native.GetDiskRates();
         _native.GetNetworkRates();
@@ -172,7 +174,39 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
     /// <summary>I processi da seguire nel campionamento dei core, uno per colore (-1 = colore libero).</summary>
-    public void TrackProcesses(int[] pids) => _sampler?.Track(pids);
+    public void TrackProcesses(int[] pids)
+    {
+        _trackedPids = (int[])pids.Clone();
+        _sampler?.Track(_trackedPids);
+    }
+
+    /// <summary>Accende o spegne il campionamento dei core. Aprire e chiudere la sessione del kernel prende qualche millisecondo
+    /// (la chiusura aspetta il thread di ETW): lo si fa fuori dal thread della UI, una cosa alla volta.</summary>
+    public void SetCoreSampling(bool on)
+    {
+        if (!CoreSamplingAvailable || on == (_sampler is not null)) return;
+        if (Interlocked.Exchange(ref _samplingSwitching, 1) == 1) return;
+        Task.Run(() =>
+        {
+            try
+            {
+                if (on)
+                {
+                    var sampler = CoreSampler.TryStart(CpuCorePhysical.Length, out _);
+                    if (sampler is null) { _samplingFailed = true; return; }   // il motivo è nel perf log
+                    sampler.Track(_trackedPids);
+                    _sampler = sampler;
+                }
+                else
+                {
+                    var sampler = _sampler;
+                    _sampler = null;
+                    sampler?.Dispose();
+                }
+            }
+            finally { Volatile.Write(ref _samplingSwitching, 0); }
+        });
+    }
 
     public void Dispose()
     {

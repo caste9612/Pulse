@@ -9,8 +9,9 @@ namespace ResourceMonitor.Services;
 /// <summary>
 /// Quale processo gira su quale core. Windows non lo tiene da leggere a basso costo (lo scheduler sposta i thread tra i core di
 /// continuo), ma il kernel può annotare, 100 volte al secondo su ogni core logico, il thread che sta girando: i campioni
-/// SampledProfile di ETW, da una sessione "system logger" in tempo reale. Qui si contano per core e per processo seguito (i primi
-/// tre di Top CPU, uno per colore). Serve Pulse da amministratore: senza, StartTrace nega l'accesso e non parte niente.
+/// SampledProfile di ETW, da una sessione "system logger" in tempo reale. Qui si contano per core e per processo seguito (fino a
+/// tre processi di Top CPU sopra il mezzo core, uno per colore); la sessione è aperta solo finché ce n'è uno (MetricsService
+/// .SetCoreSampling). Serve Pulse da amministratore: senza, StartTrace nega l'accesso e non parte niente.
 /// Se Pulse viene terminato di forza la sessione resta aperta: la chiude il prossimo avvio, prima di aprirne una nuova.
 /// </summary>
 public sealed class CoreSampler : IDisposable
@@ -39,6 +40,7 @@ public sealed class CoreSampler : IDisposable
     private int _disposed;
     private int _checks;
     private long _sampled;
+    private EventHandler? _onExit;
 
     private CoreSampler(string name, int cores, uint previousInterval)
     {
@@ -59,13 +61,31 @@ public sealed class CoreSampler : IDisposable
         Marshal.StructureToPtr(logfile, _logfile, false);
     }
 
+    /// <summary>Il campionamento può partire solo da un Pulse elevato (un amministratore senza elevazione non basta).</summary>
+    public static bool CanRun()
+    {
+        try
+        {
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            return new System.Security.Principal.WindowsPrincipal(identity).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+        }
+        catch { return false; }
+    }
+
+    // "Pulse core sampling", "Pulse.Prova core sampling" per le build di prova
+    private static string SessionName => $"{Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? "Pulse"} core sampling";
+
+    /// <summary>Chiude la sessione rimasta aperta da un Pulse terminato di forza mentre campionava: senza consumatore il kernel
+    /// continuerebbe a campionare finché un processo non torna sopra la soglia. Una chiamata, all'avvio.</summary>
+    public static void StopOrphan() => StopSession(SessionName);
+
     /// <summary>Avvia il campionamento dei <paramref name="cores"/> core logici. Null se non parte: <paramref name="error"/> è
     /// l'errore di Windows (5 = Pulse non è da amministratore).</summary>
     public static CoreSampler? TryStart(int cores, out int error)
     {
         error = 0;
         if (IntPtr.Size != 8 || Marshal.SizeOf<EVENT_TRACE_LOGFILEW>() != 448) { error = 50; return null; }   // ERROR_NOT_SUPPORTED
-        var name = $"{Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? "Pulse"} core sampling";
+        var name = SessionName;
         EnableProfilePrivilege();
 
         error = StartSession(name, out ulong session);
@@ -117,7 +137,8 @@ public sealed class CoreSampler : IDisposable
             Name = "Pulse core sampling"
         };
         sampler._thread.Start();
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => sampler.Dispose();
+        sampler._onExit = (_, _) => sampler.Dispose();
+        AppDomain.CurrentDomain.ProcessExit += sampler._onExit;
         return sampler;
     }
 
@@ -158,6 +179,7 @@ public sealed class CoreSampler : IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        if (_onExit is not null) AppDomain.CurrentDomain.ProcessExit -= _onExit;
         StopSession(_name);
         if (_trace != InvalidTrace) CloseTrace(_trace);
         _thread?.Join(2000);

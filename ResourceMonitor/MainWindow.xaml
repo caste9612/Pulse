@@ -83,7 +83,7 @@
             </Grid>
         </DataTemplate>
         <!-- quadratino del colore del processo nelle barre dei core (Slot 0–2): trasparente se il processo non è seguito (-1),
-             assente senza il campionamento del kernel (-2) -->
+             assente se il campionamento del kernel non è disponibile, cioè Pulse non è da amministratore (-2) -->
         <Style x:Key="ProcessSwatch" TargetType="Rectangle">
             <Setter Property="Width" Value="6"/>
             <Setter Property="Height" Value="6"/>
@@ -105,7 +105,7 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
-        <!-- Top CPU: il quadratino del colore, il valore in core, la percentuale della CPU nel tooltip -->
+        <!-- Top CPU: il quadratino del colore, la percentuale della CPU, lo stesso valore in core nel tooltip -->
         <DataTemplate x:Key="CpuProcessRowTemplate">
             <Grid Margin="0,1,0,1" Background="Transparent" ContextMenu="{StaticResource ProcessMenu}" ToolTip="{Binding Tip}">
                 <Grid.ColumnDefinitions>

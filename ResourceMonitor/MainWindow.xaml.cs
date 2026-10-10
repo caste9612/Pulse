@@ -31,9 +31,10 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
     private bool _procRunning;
     private bool _cornerPickerOpen;
 
-    // il processo di ogni colore nelle barre dei core (-1 = colore libero): i primi tre di Top CPU, ciascuno col suo colore finché
-    // resta tra i primi tre, anche se cambia posto
+    // il processo di ogni colore nelle barre dei core (-1 = colore libero): fino a tre processi di Top CPU sopra il mezzo core,
+    // ciascuno col suo colore finché non scende sotto un quarto di core, anche se cambia posto
     private readonly int[] _slotPids = { -1, -1, -1 };
+    private const double TrackFromCores = 0.5, TrackUntilCores = 0.25;
 
     // margine dai bordi dello schermo negli angoli e nella posizione del primo avvio: lo spazio S3 di Reticle (12 unità),
     // lo stesso che il contenuto ha dentro la cornice
@@ -180,14 +181,12 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         int physical = _metrics.CpuCorePhysical.Distinct().Count();
         var cores = physical < logical ? $"core logici ({logical}, su {physical} core fisici)" : $"core ({logical})";
         var bars = physical < logical ? "una barra per core logico, attaccate quelle dello stesso core fisico" : "una barra per core";
-        var colors = _metrics.CoreSamplingError switch
-        {
-            0 => "\nColori: la parte di ogni core usata dai primi tre processi di Top CPU (il quadratino accanto al nome), " +
-                 "campionata dal kernel 100 volte al secondo; il resto nel colore della CPU.",
-            5 => "\nPer vedere nei colori quali processi di Top CPU occupano i core, Pulse va avviato come amministratore.",
-            -1 => "",
-            int error => $"\nColori dei processi non disponibili: il campionamento del kernel non è partito (errore {error})."
-        };
+        var colors = _metrics.CoreSamplingDisabled ? ""
+            : _metrics.CoreSamplingAvailable
+                ? $"\nColori: la parte di ogni core usata dai processi di Top CPU sopra il mezzo core ({TrackFromCores * 100 / logical:0.0} %), " +
+                  "fino a tre (il quadratino accanto al nome), campionata dal kernel 100 volte al secondo solo finché ce n'è uno; " +
+                  "il resto nel colore della CPU."
+                : "\nPer vedere nei colori quali processi di Top CPU occupano i core, Pulse va avviato come amministratore.";
         return $"Somma dei carichi dei {cores}: quanti core pieni vale il lavoro in corso.\n" +
                $"Sotto il grafico {bars}: tante barre medie vogliono dire lavoro parallelo, una sola piena un thread solo." + colors;
     }
@@ -335,15 +334,16 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             await Task.Run(() => _proc.Update());
             var topCpu = _proc.TopByCpu;
             TrackLeaders(topCpu);
-            // in core (secondi di CPU al secondo), come le barre: su 32 core logici un thread pieno vale 1, non il 3 %
+            // a schermo la percentuale della CPU; nel tooltip lo stesso valore in core, l'unità delle barre (su 32 core logici un
+            // thread sempre al lavoro è il 3 %, cioè 1 core)
             int processors = Environment.ProcessorCount;
             TopCpuList.ItemsSource = topCpu.Select(p => new ProcessRow
             {
                 Pid = p.Pid,
                 Name = p.Name,
-                Value = $"{p.CpuPercent * processors / 100:0.00} core",
-                Tip = $"{p.CpuPercent:0.0} % della CPU",
-                Slot = _metrics.CoreSamplingActive ? Array.IndexOf(_slotPids, p.Pid) : -2
+                Value = $"{p.CpuPercent,5:0.0}%",
+                Tip = $"{p.CpuPercent * processors / 100:0.00} core: quanti core pieni vale questo processo",
+                Slot = _metrics.CoreSamplingAvailable ? Array.IndexOf(_slotPids, p.Pid) : -2
             }).ToArray();
             TopRamList.ItemsSource = _proc.TopByMemory.Select(p => new ProcessRow
             {
@@ -364,16 +364,22 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         }
     }
 
-    // i primi tre di Top CPU nei colori delle barre dei core: chi esce libera il suo colore, chi entra prende uno libero
+    // nei colori delle barre dei core fino a tre processi di Top CPU: entra chi usa almeno mezzo core, esce chi scende sotto un
+    // quarto (due soglie, così chi sta a cavallo non lampeggia); chi esce libera il suo colore, chi entra ne prende uno libero.
+    // Il campionamento del kernel resta acceso solo finché c'è almeno un processo da seguire
     private void TrackLeaders(IReadOnlyList<ProcessSample> top)
     {
-        if (!_metrics.CoreSamplingActive) return;
-        var leaders = top.Take(CoreSampler.Slots).Select(p => p.Pid).ToArray();
+        if (!_metrics.CoreSamplingAvailable) return;
+        int processors = Environment.ProcessorCount;
+        var leaders = top
+            .Where(p => p.CpuPercent * processors / 100 >= (Array.IndexOf(_slotPids, p.Pid) >= 0 ? TrackUntilCores : TrackFromCores))
+            .Take(CoreSampler.Slots).Select(p => p.Pid).ToArray();
         for (int s = 0; s < _slotPids.Length; s++)
             if (Array.IndexOf(leaders, _slotPids[s]) < 0) _slotPids[s] = -1;
         foreach (int pid in leaders)
             if (Array.IndexOf(_slotPids, pid) < 0) _slotPids[Array.IndexOf(_slotPids, -1)] = pid;
         _metrics.TrackProcesses(_slotPids);
+        _metrics.SetCoreSampling(leaders.Length > 0);
     }
 
     private async void BuildDriveList()

@@ -63,12 +63,12 @@ A full performance log lives in `%TEMP%\pulse-perf.log`: any tick that exceeds 5
 
 ## Features
 
-- **CPU**: usage %, current clock (GHz), temperature, power (W) — see "Running as administrator" below; under the graph one bar per logical processor (threads of the same core side by side) and the load counted in full cores, to see how parallel the work is; as administrator the bars also show, in colour, how much of each core the first three processes of *Top CPU* take
+- **CPU**: usage %, current clock (GHz), temperature, power (W) — see "Running as administrator" below; under the graph one bar per logical processor (threads of the same core side by side) and the load counted in full cores, to see how parallel the work is; as administrator the bars also show, in colour, how much of each core the busiest processes of *Top CPU* take (up to three, from half a core up)
 - **RAM**: usage %, used/total GB, cached, committed, page file %
 - **GPU**: usage %, VRAM used/total, temperature, core/memory clocks, power (W)
 - **Network**: ↓/↑ throughput, Wi-Fi SSID/signal, local IP, public IP, ping to 8.8.8.8
 - **Disk**: total ↓/↑ throughput, per-drive free space + bar, SSD temp (when LHM Storage is enabled)
-- **Top processes**: top 6 by CPU (in cores, the first three with their colour in the core bars) and by RAM, updated every 5 s. Right-click on a process for: *Apri cartella file* · *Proprietà file* · *Termina processo* · *Cerca online*
+- **Top processes**: top 6 by CPU (those above half a core with their colour in the core bars, the load in cores in the tooltip) and by RAM, updated every 5 s. Right-click on a process for: *Apri cartella file* · *Proprietà file* · *Termina processo* · *Cerca online*
 - **System**: uptime, estimated total PC power draw (W)
 - **Corner button** next to the pin: a click opens four arrows, and the chosen one sends the widget to that corner of its screen, 12 units from the edges and never over the taskbar
 - **Themed** with the Reticle UI (from v1.2.0): dark, light or follow Windows from the tray menu; accent colour, Mica transparency, fill and density from *Aspetto...*; smooth Bezier sparklines on a dotted grid, tabular digits so live values never shift the row, custom drag/resize, always-on-top toggle
