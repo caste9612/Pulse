@@ -1,6 +1,7 @@
 ; Pulse installer (Inno Setup 6)
 ; Build: ISCC.exe pulse.iss
-; Requires: dist/ResourceMonitor.exe + native DLLs (run dotnet publish first)
+; Requires: dist/Pulse.exe + native DLLs (run dotnet publish first)
+; MyAppVersion stays 1.0.0 here: the release workflow writes the tag version into it
 
 #define MyAppName "Pulse"
 #define MyAppVersion "1.0.0"

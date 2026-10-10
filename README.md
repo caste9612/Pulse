@@ -54,7 +54,7 @@ v1.2.0 moves the widget to Reticle, the author's WPF design system, and drops th
 1. **No PerformanceCounter** — every metric is read via direct Win32 P/Invoke (`GetSystemTimes`, `GetPerformanceInfo`, `GetIfTable2`, `NtQuerySystemInformation`, `CallNtPowerInformation`). Each tick is ~5 ms instead of the ~45 ms it would cost using `PerformanceCounter`/PDH.
 2. **No `System.Windows.Forms`, no `System.Drawing`** — the tray icon is a hand-rolled Win32 `Shell_NotifyIconW` wrapper, the icon is loaded via `ExtractIconEx` from the exe itself. This drops 20–30 MB of assemblies that WPF apps usually pull in.
 3. **No `System.Management`/WMI** — we replaced the only two WMI queries (CPU temp fallback, VRAM total) with cheaper alternatives.
-4. **Pooled buffers in the sparkline** — the `Point[]` array and gradient brushes are reused across renders. Zero per-frame heap allocations.
+4. **Pooled buffers in the sparkline** — the `Point[]` array and gradient brushes are reused across renders instead of being allocated every frame.
 5. **Lazy initialisation of LibreHardwareMonitor** — sensor enumeration happens in the background after the UI is already on screen.
 6. **Staggered polling** — fast metrics (CPU/RAM/Net/Disk) tick at 1 s, hardware sensors at 2 s, top processes at 5 s, drive list at 30 s. No one tick does too much.
 7. **ReadyToRun precompile** — managed IL is precompiled to native code at publish time (`-p:PublishReadyToRun=true`), shaving ~30% off the cold-start JIT cost.
@@ -99,7 +99,7 @@ Modern Windows 11 ships with **VBS** (Virtualization-Based Security) and **HVCI*
 
 If you have **AMD Ryzen Master** installed, its driver (`AMDRyzenMasterDriverV31.sys`) is loaded as a permanent Windows service and is signed by AMD, so it passes VBS without complaints. Pulse detects this driver and uses it — *no extra installation, no manual configuration*.
 
-If you have an **Intel CPU**, install HWiNFO64 (free for personal use). Its driver is signed via newer Microsoft attestation and bypasses VBS. Future Pulse versions will read directly from HWiNFO64's shared memory; for now the LHM library tries its own driver and may fall back to "n/a" under VBS.
+If you have an **Intel CPU**, for now Pulse relies on the LHM library's own driver, which may be blocked under VBS (CPU temp/power then show "n/a"). HWiNFO64 (free for personal use) has a driver signed via newer Microsoft attestation that passes VBS: future Pulse versions will read directly from HWiNFO64's shared memory, but today installing it doesn't change what Pulse shows.
 
 See [`docs/HARDWARE-SUPPORT.md`](docs/HARDWARE-SUPPORT.md) for the full breakdown per CPU family.
 
@@ -129,7 +129,7 @@ Optional, to unlock CPU temperature / power:
 | System | What you need | Works under VBS / HVCI |
 |---|---|---|
 | AMD Ryzen | Install [AMD Ryzen Master](https://www.amd.com/en/products/processors/ryzen-master.html) → its signed driver stays loaded as a Windows service | ✅ Yes |
-| Intel Core (Gen 8–14) | Install [HWiNFO64](https://www.hwinfo.com) (free for personal) | ✅ Yes |
+| Intel Core (Gen 8–14) | Nothing to install for now: LHM's own driver, with admin rights ([HWiNFO64](https://www.hwinfo.com) support is planned) | ⚠️ May be blocked |
 | No supported tool installed | CPU temp/power show as `n/a`, everything else still works | ✅ |
 
 ## Tray menu

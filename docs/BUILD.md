@@ -5,7 +5,7 @@ How to build Pulse from source.
 ## Prerequisites
 
 - Windows 10 / 11
-- .NET 9 SDK ([download](https://dotnet.microsoft.com/download/dotnet/9.0))
+- .NET 9 SDK or newer ([download](https://dotnet.microsoft.com/download/dotnet/9.0)): the project targets `net9.0-windows`, and the .NET 10 SDK builds it too
 - (Optional) Inno Setup 6+ to build the installer ([download](https://jrsoftware.org/isdl.php) or `winget install JRSoftware.InnoSetup`)
 - (Optional) Visual Studio 2022/2026 or VS Code with C# extension
 
@@ -35,9 +35,9 @@ cd ResourceMonitor
 dotnet build
 ```
 
-Output: `bin/Debug/net9.0-windows/Pulse.exe` (~150 KB, requires DLLs alongside).
+Output: `bin/Debug/net9.0-windows/Pulse.exe` (~170 KB launcher; the code is in `Pulse.dll` and the DLLs alongside).
 
-Run from VS / Rider / `dotnet run` for a debugging session.
+Run from VS / Rider / `dotnet run` for a debugging session. Pulse is single-instance: if another Pulse is already running (an installed one, for example), a new instance doesn't start, so close the other first.
 
 ## Release build
 
@@ -54,15 +54,16 @@ Flags explained:
 Result in `dist/`:
 - `Pulse.exe` — ~10 MB (includes Reticle and its fonts)
 - `libMonoPosixHelper.dll`, `MonoPosixHelper.dll` — native deps of LibreHardwareMonitorLib (~1.5 MB)
+- `Pulse.pdb` — symbols (the portable zip includes them, the installer doesn't)
 
 `ResourceMonitor.csproj` Release config also enables:
-- `PublishReadyToRun=true` — precompiles managed IL to native code → faster cold start (~270 ms)
+- `PublishReadyToRun=true` — precompiles managed IL to native code → ~30% less JIT at cold start
 - `PublishReadyToRunComposite=true` — better R2R packaging
 
 ## Project layout
 
 ```
-ResourceMonitor/
+ResourceMonitor/                   namespace ResourceMonitor, assembly Pulse
 ├── ResourceMonitor.csproj         project file
 ├── App.xaml / App.xaml.cs         entry point + tray icon + Reticle theme (ReticleTheme, ThemeManager)
 ├── MainWindow.xaml / .cs          main UI (ReticleWindow, widget pattern) + drag/resize/persist
@@ -77,31 +78,36 @@ ResourceMonitor/
 │   ├── ProcessMonitor.cs          5s tick: top processes by CPU/RAM
 │   ├── NetworkMonitor.cs          2s tick: ping, IPs, Wi-Fi
 │   ├── DriveMonitor.cs            30s tick: free space per drive
+│   ├── TrayIcon.cs                tray icon via Shell_NotifyIconW (no WinForms)
 │   ├── SettingsService.cs         JSON load/save (%APPDATA%)
 │   └── PerfLog.cs                 logs slow ticks (debug)
 │
-└── Controls/
-    └── Sparkline.cs               custom-render sparkline chart
+├── Controls/
+│   └── Sparkline.cs               custom-render sparkline chart
+│
+└── Resources/
+    └── app.ico                    multi-resolution icon (scripts/generate-icon.ps1)
 ```
 
 ## Performance measurement
 
-The repo includes `measure.ps1`, which:
+The repo includes `measure-deep.ps1`, which:
 
-1. Kills running Pulse instances
-2. (Optionally) clears the single-file extraction cache for true cold-start timing
+1. Stops running Pulse instances (and old `ResourceMonitor` ones). An installed Pulse running as administrator can't be stopped from a non-elevated shell, and then the new instance doesn't start: close it first
+2. With `-ClearCache`, clears the single-file extraction cache (`%LOCALAPPDATA%\Temp\.net\Pulse`) for true cold-start timing
 3. Launches and measures:
    - `WaitForInputIdle` time (message loop ready)
-   - Working set + private memory after 25 s settle
-   - Average CPU idle % over 30 s sample
-   - Thread count
-4. Appends to `perf-history.csv`
+   - Working set, private memory, handles and threads after 25 s settle
+   - Then every second for `-DurationSec` (default 120): CPU % (average, P95, max), working set (average, min/max, growth) and handles
+4. Appends a row to `perf-deep.csv` (the path is `$csvPath` at the bottom of the script)
 
 Usage:
 
 ```powershell
-./measure.ps1 -Label "baseline" -ClearCache
+./measure-deep.ps1 -ExePath .\dist\Pulse.exe -Label "baseline" -ClearCache
 ```
+
+`-ExePath` defaults to a path on the author's PC, so pass it. `measure.ps1`, the shorter v1.0 script (30 s CPU sample, `perf-history.csv`), predates the rename to `Pulse.exe`: it still stops `ResourceMonitor` processes and looks for a "Resource Monitor" window.
 
 History from refactoring (Ryzen 9 7950X reference):
 
@@ -114,20 +120,15 @@ History from refactoring (Ryzen 9 7950X reference):
 | current | 9.4 | 146-155 | 1.5-3 | + Wifi/Drive offload to background |
 | **v1.1.0 (Win32 native)** | **7.0** | **144** | **~1.5** | PerfCounter replaced with GetSystemTimes / GetIfTable2 / NtQuerySystemInformation |
 
-## Diagnostic sensor dump
+## Seeing the sensors LHM exposes
 
-To see what LibreHardwareMonitorLib exposes on a new system:
-
-1. Uncomment `try { DumpSensors(); } catch { }` in `HardwareMonitor.Update()`
-2. Rebuild + run as admin
-3. Open `%TEMP%\pulse-sensors.txt`
-4. Look for non-zero values and copy any new sensor names to the filters
+To see what LibreHardwareMonitorLib exposes on a new system, run the LibreHardwareMonitor app as admin: it is built on the same library (ideally take the release matching the `LibreHardwareMonitorLib` version in `ResourceMonitor.csproj`). Look for non-zero values and copy any new sensor names to the filters in `HardwareMonitor.Update()`.
 
 Useful when adding support for new CPU generations.
 
 ## Perf log
 
-Pulse writes to `%TEMP%\pulse-perf.log` whenever a tick exceeds its threshold (100 ms metrics, 200 ms procs, 500 ms slow total). Empty file = no UI freezes detected.
+Pulse writes to `%TEMP%\pulse-perf.log` whenever a tick exceeds its threshold (50 ms metrics, 200 ms hardware/network/procs, 500 ms slow total). Empty file = no UI freezes detected.
 
 ## Building the installer
 
@@ -143,7 +144,7 @@ Build the release first (above), then:
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/pulse.iss
 ```
 
-Output: `installer/Output/Setup-Pulse-X.Y.Z.exe`.
+Output: `installer/Output/Setup-Pulse-vX.Y.Z.exe`, with the version of `#define MyAppVersion` in `pulse.iss`. That define stays 1.0.0 in the repository, because the release workflow overwrites it with the tag: set it by hand for a local installer with the right number.
 
 See [INSTALLER.md](INSTALLER.md) for what the installer does.
 
@@ -162,19 +163,19 @@ Running the workflow by hand (*Actions → Build & Release → Run workflow*) bu
 
 ## Debugging the installed instance
 
-After install, the exe lives at `%LocalAppData%\Programs\Pulse\Pulse.exe` (or `%ProgramFiles%\Pulse\` if installed system-wide).
+After install, the exe lives at `%LocalAppData%\Programs\Pulse\Pulse.exe`, in both install modes (see [INSTALLER.md](INSTALLER.md#per-user-vs-system-wide)).
 
 To attach a debugger:
 
-1. Launch the installed Pulse (or start with `--no-tray` from a console for stdout)
+1. Launch the installed Pulse. It has no console: its `Debug.WriteLine` messages exist only in Debug builds, in the debugger's Output window
 2. In Visual Studio: Debug → Attach to Process → Pulse.exe
 
 Settings + logs paths:
 
 - Settings: `%APPDATA%\Pulse\settings.json` (migrated from `%APPDATA%\ResourceMonitor` if exists)
 - Appearance (theme, accent, transparency, fill, density): `%LOCALAPPDATA%\Pulse\reticle-theme.json`
+- Autostart: the `Pulse` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, or the `Pulse` scheduled task (installer option, elevated)
 - Perf log: `%TEMP%\pulse-perf.log`
-- Sensor dump (if enabled): `%TEMP%\pulse-sensors.txt`
 
 ## Contributing
 

@@ -13,7 +13,9 @@ How Pulse is structured under the hood.
                          │  │  (custom render) │      arrays   │
                          │  └──────────────────┘               │
                          │  ┌──────────────────┐               │
-                         │  │  TextBlocks x12  │  ◄── strings  │
+                         │  │  TextBlocks +    │  ◄── strings  │
+                         │  │  lists (drives,  │               │
+                         │  │  top processes)  │               │
                          │  └──────────────────┘               │
                          └────────────▲────────────────────────┘
                                       │ Dispatcher.BeginInvoke
@@ -24,7 +26,7 @@ How Pulse is structured under the hood.
 │  ┌──────────────────┐  ┌────────────┴─────────┐                    │
 │  │ AppSettings JSON │  │ MetricsService       │ ◄── fires every 1s │
 │  │ %APPDATA%\Pulse  │  │ (CPU%, RAM, Disk,    │     on dispatcher  │
-│  │ \settings.json   │  │  Net via PerfCounter)│                    │
+│  │ \settings.json   │  │  Net via Win32)      │                    │
 │  └──────────────────┘  └──────────────────────┘                    │
 │                                                                    │
 │  ┌──────────────────┐  ┌──────────────────────┐                    │
@@ -45,7 +47,7 @@ How Pulse is structured under the hood.
 │  └──────────────────┘  └──────────────────────┘                    │
 │                                                                    │
 │  ┌──────────────────────────────────────────────────────┐          │
-│  │ NotifyIcon (WinForms) — tray icon + context menu     │          │
+│  │ TrayIcon (Win32 Shell_NotifyIconW) + WPF ContextMenu │          │
 │  └──────────────────────────────────────────────────────┘          │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -56,39 +58,42 @@ Different metrics update at different rates to balance freshness vs CPU cost:
 
 | Service | Interval | Cost per tick | Why |
 |---|---|---|---|
-| MetricsService | 1 s | <10 ms | PerfCounter reads are cheap when filtered |
+| MetricsService | 1 s | ~5 ms | Direct Win32 calls through `NativeMetrics`; runs on the UI thread (`DispatcherTimer`) |
 | HardwareMonitor (LHM) | 2 s | 10-50 ms | Polling all sensors; runs in background thread |
 | ProcessMonitor | 5 s | 50-200 ms | Process.GetProcesses is expensive; background thread |
-| NetworkMonitor | 2 s | <5 ms (ping) | Async ping; netsh subprocess every 8s on background |
+| NetworkMonitor | 2 s | <5 ms (ping) | Async ping to 8.8.8.8; adapter scan and `netsh` (every 8 s) on a background thread; public IP every 10 min |
 | DriveMonitor | 30 s | <5 ms | DriveInfo is fast; can stall on sleeping HDDs (background) |
 
-All slow work happens on `Task.Run` background threads. The UI thread only does the final text/sparkline updates via `Dispatcher.BeginInvoke`.
+The 1 s tick is cheap enough to run on the UI thread. All slower work happens on `Task.Run` background threads, and the UI thread only does the final text/sparkline updates.
 
-Performance log: ticks that exceed thresholds (100 ms metrics, 200 ms proc, 500 ms slow total) get logged to `%TEMP%\pulse-perf.log` for debugging UI freezes.
+Performance log: ticks that exceed thresholds (50 ms metrics tick, 200 ms hardware/network/process ticks, 500 ms whole slow tick) get logged to `%TEMP%\pulse-perf.log` for debugging UI freezes.
 
 ## Data flow
 
-1. **MetricsService timer fires** → reads `Processor Information % Utility`, memory counters, disk Read/Write Bytes/sec, network Bytes/sec sums.
+1. **MetricsService timer fires** (1 s, UI thread) → `NativeMetrics` reads the CPU times (`GetSystemTimes`), memory (`GlobalMemoryStatusEx`, `GetPerformanceInfo`), the system-wide I/O byte counters (`NtQuerySystemInformation`), the network interface table (`GetIfTable2`) and the CPU clock (`CallNtPowerInformation`). CPU % and the disk/network rates come from the delta with the previous sample.
 2. Raises `Updated` event.
-3. `MainWindow.OnMetricsUpdated` updates TextBlocks and assigns new `double[]` arrays to Sparkline.Values (triggers `OnRender`).
-4. **Slow tick fires** (separate timer) → background `Task.Run(_hw.Update())` (LHM), `_net.UpdateAsync()`, then marshals back to UI thread to update temp/clock/watt/IP labels.
+3. `MainWindow.OnMetricsUpdated` updates TextBlocks and assigns a fresh `ToArray()` of each 60-value history to `Sparkline.Values` (triggers `OnRender`).
+4. **Slow tick fires** (2 s, separate timer) → background `Task.Run(_hw.Update)` (LHM), then `_net.UpdateAsync()`, then back on the UI thread to update temp/clock/watt/IP labels.
 5. `MetricsService.GpuExternal` and `VramUsedExternalGb` are set from `HardwareMonitor` outputs so the GPU sparkline still updates on the 1s tick.
+6. **Process tick** (5 s) and **drive tick** (30 s) scan on `Task.Run`, then replace the items of the *Top CPU* / *Top RAM* panels and of the drive list.
 
 ## Sparkline rendering
 
 `Controls/Sparkline.cs` is a `FrameworkElement` (not UserControl) that overrides `OnRender(DrawingContext)`. It:
 
-- Reads `Values` (an enumerable of 60 doubles)
-- Normalizes to `MaxValue` (or auto-scales if `AutoScale=true`)
-- Builds a `StreamGeometry` for the fill (closed area to baseline)
-- Builds a second `StreamGeometry` for the stroke line
-- Draws fill (semi-transparent) + stroke (full opacity)
+- Reads `Values` (an enumerable of 60 doubles) into a `Point[]` buffer reused between renders
+- Normalizes to `MaxValue` (100 for CPU, RAM and GPU) or auto-scales to the highest value (`AutoScale="True"` for NET and DSK)
+- Smooths the line: a cardinal spline (tension 0.5) written as cubic Bezier segments
+- Builds a `StreamGeometry` for the fill (closed area to baseline) and a second one for the stroke line
+- Draws the fill (vertical gradient from `FillOpacity` to transparent), the stroke and a dot with a halo on the last value (`ShowEndDot`)
 
-`Values` is registered with `FrameworkPropertyMetadataOptions.AffectsRender`, so any assignment re-triggers render. The MainWindow assigns a fresh `_metrics.CpuHistory.ToArray()` each tick.
+The gradient and halo brushes are cached and rebuilt only when the colour changes. The dotted grid under the curve is not drawn here: it is the `Reticle.Brush.Dots` background of the hosting border (`SparkBed` in `MainWindow.xaml`).
+
+`Values` is registered with `FrameworkPropertyMetadataOptions.AffectsRender`, so any assignment re-triggers render. The MainWindow assigns a fresh `ToArray()` of each history every tick.
 
 ## State persistence
 
-Single JSON file at `%APPDATA%\ResourceMonitor\settings.json`:
+Window state lives in a single JSON file at `%APPDATA%\Pulse\settings.json` (on first launch it is copied from `%APPDATA%\ResourceMonitor\settings.json`, the pre-v1.1.0 location, if only that one exists):
 
 ```json
 {
@@ -101,41 +106,46 @@ Single JSON file at `%APPDATA%\ResourceMonitor\settings.json`:
 }
 ```
 
-Saved on `LocationChanged`, `SizeChanged`, on close, and on toggle of tray menu options.
+Saved on `LocationChanged`, `SizeChanged`, on close, when the widget is hidden or shown, and on toggle of tray menu options.
+
+The appearance (theme, accent, transparency, fill, density) is saved by Reticle in `%LOCALAPPDATA%\Pulse\reticle-theme.json` (see below). *Avvia con Windows* writes the `Pulse` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 ## UI: Reticle
 
 From v1.2.0 the widget is built on Reticle, the author's WPF design system (v0.5.0, as the two DLLs in `lib/Reticle`, updated with `scripts/update-reticle.ps1`):
 
-- `App.xaml` merges `ReticleTheme` (the app defaults: dark, green accent, Mica, compact) and `ReticleControls`; `App.OnStartup` loads the user's choices with `ThemeManager.Initialize(new JsonThemeSettingsStore("Pulse"))`, i.e. `%LOCALAPPDATA%\Pulse\reticle-theme.json`.
+- `App.xaml` merges `ReticleTheme` (the app defaults: dark, green accent, Mica, compact) and `ReticleControls`; `App.OnStartup` loads the user's choices with `ThemeManager.Current.Initialize(new JsonThemeSettingsStore("Pulse"))`, i.e. `%LOCALAPPDATA%\Pulse\reticle-theme.json`.
 - `MainWindow` is a `ReticleWindow` without caption bar (`ShowCaption="False"`) that hosts a `TickBorder` frame: the widget pattern of Reticle. No `AllowsTransparency`, no `DropShadowEffect`: the transparency is the Windows 11 backdrop (Mica by default, Acrylic or opaque from *Aspetto...*), composed by DWM instead of copied back from the GPU on every update.
 - The tray menu switches the theme (*Tema*); *Aspetto...* opens Reticle's `AppearanceSettingsView`. Every change is applied live and saved.
 - Series colours: CPU, GPU, NET and DSK use the theme tones (info, success, warning, danger); RAM violet and temperature amber are fixed categories, with darker shades on the light theme (`MainWindow.UpdateSeriesBrushes`).
-- Reticle's animations and timers run only while the widget is on screen, so a widget hidden in the tray costs nothing on the UI side.
+- Reticle's animations and timers run only while the widget is on screen. Pulse's own polling keeps running while the widget is hidden in the tray, so the values are current when it comes back: hidden costs less CPU than visible, not zero (see the v1.2.0 figures in the README).
 
-## Why WPF + WinForms tray icon
+## Tray icon without WinForms
 
-WPF doesn't include a `NotifyIcon`. Two ways to get one:
+WPF doesn't include a `NotifyIcon`. Three ways to get one:
 
 1. Third-party NuGet (e.g., `H.NotifyIcon.Wpf`) — adds dependency
-2. Enable WinForms in the WPF project (`<UseWindowsForms>true</UseWindowsForms>`) and use `System.Windows.Forms.NotifyIcon`
+2. Enable WinForms in the WPF project (`<UseWindowsForms>true</UseWindowsForms>`) and use `System.Windows.Forms.NotifyIcon` — what Pulse did before v1.0.0; loading the WinForms assemblies cost 20-30 MB of RAM
+3. Call the Windows shell directly — what Pulse does
 
-We use option 2. It costs ~20-30 MB of RAM (WinForms assemblies loaded) and **blocks `PublishTrimmed`** (WinForms isn't trim-safe). Trade-off accepted for fewer external deps.
+`Services/TrayIcon.cs` registers the icon with `Shell_NotifyIconW` (`NOTIFYICON_VERSION_4`) and gets its messages through a message-only window (an `HwndSource` parented to `HWND_MESSAGE`). The icon is the exe's own, loaded with `ExtractIconEx`. Left click shows or hides the widget, double click brings it back, right click opens a WPF `ContextMenu` at the mouse position: `App.PopulateMenu` rebuilds it at every opening, and it takes its style from the Reticle theme.
 
 ## Single instance
 
-A named mutex `ResourceMonitor.SingleInstance` is created at startup. If already taken, the second launch silently exits.
+A named mutex `Pulse.SingleInstance` is created at startup (`ResourceMonitor.SingleInstance` before v1.1.0). If already taken, the second launch silently exits, so a build started while another Pulse is running doesn't start: close the other one first.
 
 ## Build configuration
 
 `ResourceMonitor.csproj` key flags:
 
-- `<TargetFramework>net9.0-windows</TargetFramework>` — WPF on .NET 9
-- `<UseWPF>true</UseWPF>`, `<UseWindowsForms>true</UseWindowsForms>`
+- `<TargetFramework>net9.0-windows</TargetFramework>`, `<UseWPF>true</UseWPF>` — WPF on .NET 9, no WinForms
+- `<AssemblyName>Pulse</AssemblyName>` — the exe is `Pulse.exe`; the namespace stays `ResourceMonitor`
 - `<ServerGarbageCollection>false</ServerGarbageCollection>` — Workstation GC: lower memory floor
-- `<PublishReadyToRun>true</PublishReadyToRun>` — ~270ms cold start, +4 MB exe size
-- `<PublishReadyToRunComposite>true</PublishReadyToRunComposite>` — composite for better startup
-- Framework-dependent + single-file deployment → ~9 MB exe + 1.5 MB native DLLs
+- `ConcurrentGarbageCollection`, `TieredCompilation`, `TieredPGO` set to `true` — the .NET defaults, made explicit
+- `<PublishReadyToRun>true</PublishReadyToRun>` (Release) — precompiled IL: ~30% less JIT at cold start, +4 MB exe size
+- `<PublishReadyToRunComposite>true</PublishReadyToRunComposite>` (Release) — composite for better startup
+- `LibreHardwareMonitorLib` 0.9.6 from NuGet; `Reticle.Wpf` and `Reticle.Tokens` referenced as DLLs from `lib/Reticle`
+- Framework-dependent + single-file deployment → ~10 MB exe (Reticle and its fonts included) + 1.5 MB native DLLs
 
 ## What got removed for performance
 
@@ -147,4 +157,10 @@ Earlier iterations measured ~6.77% idle CPU. Optimizations dropped it to ~1.5%:
 4. **NetworkMonitor.UpdateWifi sync `netsh` call** — moved to `Task.Run` (was blocking UI up to 800 ms every 8 s).
 5. **DriveMonitor.Update sync `DriveInfo.GetDrives`** — moved to `Task.Run` (could stall on sleeping HDDs).
 
-See `docs/BUILD.md` for the measurement methodology and `measure.ps1`.
+Later releases removed whole layers:
+
+- v1.0.0: WinForms (the tray icon, see above) and `System.Management` (WMI)
+- v1.1.0: `PerformanceCounter` altogether, replaced by the Win32 calls of `NativeMetrics` (~45 ms → ~5 ms per tick)
+- v1.2.0: the layered transparent window (`AllowsTransparency`) and its drop shadow, replaced by the Mica backdrop
+
+See `docs/BUILD.md` for the measurement methodology and `measure-deep.ps1`.
