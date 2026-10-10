@@ -6,6 +6,8 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using ResourceMonitor.Services;
 
@@ -27,6 +29,11 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
     private bool _suppressSave;
     private bool _slowRunning;
     private bool _procRunning;
+    private bool _cornerPickerOpen;
+
+    // margine dai bordi dello schermo negli angoli e nella posizione del primo avvio: lo spazio S3 di Reticle (12 unità),
+    // lo stesso che il contenuto ha dentro la cornice
+    private const double CornerPadding = Reticle.Tokens.Space.S3;
     private DateTime _appStart = DateTime.UtcNow;
     private DateTime _machineBoot;
 
@@ -59,6 +66,11 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         Closing += OnClosing;
         SizeChanged += (_, _) => { if (_settingsLoaded) SaveGeometry(); };
         LocationChanged += (_, _) => { if (_settingsLoaded) SaveGeometry(); };
+
+        // la scelta dell'angolo si chiude con Esc, con un clic altrove nel widget e quando il widget perde il fuoco
+        PreviewMouseDown += (_, _) => { if (_cornerPickerOpen && !CornerPicker.IsMouseOver && !CornerButton.IsMouseOver) CloseCornerPicker(); };
+        PreviewKeyDown += (_, e) => { if (_cornerPickerOpen && e.Key == Key.Escape) { CloseCornerPicker(); e.Handled = true; } };
+        Deactivated += (_, _) => CloseCornerPicker();
     }
 
     // colori di serie fissi (RAM viola, temperature ambra): categorie, non stati, quindi non vengono dal tema; sul chiaro
@@ -91,8 +103,8 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         else
         {
             var area = SystemParameters.WorkArea;
-            Left = area.Right - Width - 12;
-            Top = area.Top + 12;
+            Left = area.Right - Width - CornerPadding;
+            Top = area.Top + CornerPadding;
         }
         Topmost = _settings.Topmost;
         UpdatePinGlyph();
@@ -379,6 +391,87 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         }
     }
 
+    private void CornerButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_cornerPickerOpen) CloseCornerPicker();
+        else OpenCornerPicker();
+    }
+
+    // le frecce compaiono sotto il bottone e si aprono dal centro verso l'angolo che indicano: traslazione e dissolvenza con le
+    // durate di Reticle, niente scala sui bottoni (01-bottone); con le animazioni di Windows spente compaiono e basta
+    private void OpenCornerPicker()
+    {
+        _cornerPickerOpen = true;
+        CornerButton.SetResourceReference(ForegroundProperty, "Reticle.Brush.Accent");
+        CornerPicker.Visibility = Visibility.Visible;
+        CornerPicker.IsHitTestVisible = true;
+        CornerPicker.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var root = (FrameworkElement)CornerPicker.Parent;
+        double width = CornerPicker.DesiredSize.Width;
+        double center = CornerButton.TranslatePoint(new Point(CornerButton.ActualWidth / 2, 0), root).X;
+        CornerPicker.Margin = new Thickness(Math.Clamp(center - width / 2, 0, Math.Max(0, root.ActualWidth - width)), 2, 0, 0);
+
+        if (!Reticle.Wpf.ThemeManager.Current.Capabilities.AnimationsEnabled)
+        {
+            CornerPicker.BeginAnimation(OpacityProperty, null);
+            return;
+        }
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        CornerPicker.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, Reticle.Tokens.Motion.Base) { EasingFunction = ease });
+        foreach (var arrow in new[] { CornerTopLeft, CornerTopRight, CornerBottomLeft, CornerBottomRight })
+        {
+            var (right, bottom) = CornerOf(arrow);
+            if (arrow.RenderTransform is not TranslateTransform move) arrow.RenderTransform = move = new TranslateTransform();
+            move.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(right ? -6 : 6, 0, Reticle.Tokens.Motion.Reveal) { EasingFunction = ease });
+            move.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(bottom ? -6 : 6, 0, Reticle.Tokens.Motion.Reveal) { EasingFunction = ease });
+        }
+    }
+
+    private void CloseCornerPicker()
+    {
+        if (!_cornerPickerOpen) return;
+        _cornerPickerOpen = false;
+        CornerButton.ClearValue(ForegroundProperty);
+        CornerPicker.IsHitTestVisible = false;
+        if (!Reticle.Wpf.ThemeManager.Current.Capabilities.AnimationsEnabled)
+        {
+            CornerPicker.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var fade = new DoubleAnimation(0, Reticle.Tokens.Motion.Fast) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+        // riaperta durante la dissolvenza: resta a schermo
+        fade.Completed += (_, _) => { if (!_cornerPickerOpen) CornerPicker.Visibility = Visibility.Collapsed; };
+        CornerPicker.BeginAnimation(OpacityProperty, fade);
+    }
+
+    private void CornerArrow_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement arrow) return;
+        CloseCornerPicker();
+        var (right, bottom) = CornerOf(arrow);
+        MoveToCorner(right, bottom);
+    }
+
+    private static (bool Right, bool Bottom) CornerOf(FrameworkElement arrow) =>
+        arrow.Tag is string corner
+            ? (corner.EndsWith("Right", StringComparison.Ordinal), corner.StartsWith("Bottom", StringComparison.Ordinal))
+            : (false, false);
+
+    // l'angolo dell'area di lavoro del monitor su cui sta il widget, quindi mai sopra la barra delle applicazioni; in pixel di
+    // Windows, perché con monitor a scale diverse le coordinate WPF non bastano. La posizione nuova si salva da sola (LocationChanged)
+    private void MoveToCorner(bool right, bool bottom)
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var rect)) return;
+        var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), ref info)) return;
+        int pad = (int)Math.Round(CornerPadding * GetDpiForWindow(hwnd) / 96.0);
+        var work = info.rcWork;
+        int x = right ? work.Right - (rect.Right - rect.Left) - pad : work.Left + pad;
+        int y = bottom ? work.Bottom - (rect.Bottom - rect.Top) - pad : work.Top + pad;
+        SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
     private void HideButton_Click(object sender, RoutedEventArgs e)
     {
         Hide();
@@ -532,6 +625,30 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
 
     [DllImport("user32.dll")]
     private static extern bool ReleaseCapture();
+
+    private const uint MONITOR_DEFAULTTONEAREST = 2;
+    private const uint SWP_NOSIZE = 0x0001, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
 
     private void ResizeGrip_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {

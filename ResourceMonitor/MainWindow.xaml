@@ -91,6 +91,10 @@
                     MouseLeftButtonDown="DragHandle_MouseLeftButtonDown">
                 <DockPanel LastChildFill="True">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- le quattro tacche d'angolo di Reticle: apre la scelta dell'angolo (CornerPicker) -->
+                        <Button x:Name="CornerButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
+                                rt:Rt.Icon="M2.5,6.5 V2.5 H6.5 M9.5,2.5 H13.5 V6.5 M13.5,9.5 V13.5 H9.5 M6.5,13.5 H2.5 V9.5"
+                                ToolTip="Sposta in un angolo dello schermo" Click="CornerButton_Click"/>
                         <Button x:Name="PinButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
                                 rt:Rt.Icon="M5.5,1.5 H10.5 M6.5,1.5 V6.5 L4.5,9.5 H11.5 L9.5,6.5 V1.5 M8,9.5 V14.5"
                                 ToolTip="Sempre in primo piano (clicca per togglare)" Click="PinButton_Click"/>
@@ -257,6 +261,30 @@
                 <Path Width="12" Height="12" Margin="6" Stroke="{DynamicResource Reticle.Brush.Text.Muted}" StrokeThickness="1"
                       IsHitTestVisible="False" Data="M 0,12 L 12,0 M 4,12 L 12,4 M 8,12 L 12,8"/>
             </Border>
+
+            <!-- scelta dell'angolo, sopra il contenuto e sotto il bottone (Margin.Left lo calcola OpenCornerPicker): le frecce stanno
+                 nella griglia come gli angoli dello schermo che indicano, dentro una tessera con le tacche di Reticle -->
+            <rt:TickBorder x:Name="CornerPicker" Grid.Row="1" Variant="Tile" HorizontalAlignment="Left" VerticalAlignment="Top"
+                           Visibility="Collapsed">
+                <Grid Margin="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Button x:Name="CornerTopLeft" Tag="TopLeft" Style="{StaticResource Reticle.Button.Icon}" Height="28"
+                            rt:Rt.Icon="M4.5,10 V4.5 H10 M4.5,4.5 L12.5,12.5" ToolTip="In alto a sinistra" Click="CornerArrow_Click"/>
+                    <Button x:Name="CornerTopRight" Grid.Column="1" Tag="TopRight" Style="{StaticResource Reticle.Button.Icon}" Height="28"
+                            rt:Rt.Icon="M6,4.5 H11.5 V10 M11.5,4.5 L3.5,12.5" ToolTip="In alto a destra" Click="CornerArrow_Click"/>
+                    <Button x:Name="CornerBottomLeft" Grid.Row="1" Tag="BottomLeft" Style="{StaticResource Reticle.Button.Icon}" Height="28"
+                            rt:Rt.Icon="M4.5,6 V11.5 H10 M4.5,11.5 L12.5,3.5" ToolTip="In basso a sinistra" Click="CornerArrow_Click"/>
+                    <Button x:Name="CornerBottomRight" Grid.Row="1" Grid.Column="1" Tag="BottomRight" Style="{StaticResource Reticle.Button.Icon}" Height="28"
+                            rt:Rt.Icon="M11.5,6 V11.5 H6 M11.5,11.5 L3.5,3.5" ToolTip="In basso a destra" Click="CornerArrow_Click"/>
+                </Grid>
+            </rt:TickBorder>
         </Grid>
     </rt:TickBorder>
 </rt:ReticleWindow>

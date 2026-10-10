@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Corner button** in the header, next to the pin (Reticle's four corner ticks): a click opens four arrows that slide out towards their corners (`motion.reveal`, no motion when Windows animations are off), and the chosen one sends the widget to that corner of the screen it is on. It stays inside the work area, so never over the taskbar, 12 units (Reticle space S3) from both edges, the same margin as the first-run position. Esc, a click elsewhere or leaving the widget closes the arrows.
+
 ### Changed
 - **Reticle 0.6.0** (from 0.5.0): `ReticleWindow` no longer uses WPF's `WindowChrome` and answers `WM_NCCALCSIZE` and `WM_NCHITTEST` itself, the change that on Reticle's other adopters removed a full-window composition at every frame. The widget behaves as before: no caption drag area (`ShowCaption="False"`), the same 6-unit resize borders.
 
