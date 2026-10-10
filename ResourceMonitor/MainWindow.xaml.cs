@@ -31,6 +31,10 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
     private bool _procRunning;
     private bool _cornerPickerOpen;
 
+    // il processo di ogni colore nelle barre dei core (-1 = colore libero): i primi tre di Top CPU, ciascuno col suo colore finché
+    // resta tra i primi tre, anche se cambia posto
+    private readonly int[] _slotPids = { -1, -1, -1 };
+
     // margine dai bordi dello schermo negli angoli e nella posizione del primo avvio: lo spazio S3 di Reticle (12 unità),
     // lo stesso che il contenuto ha dentro la cornice
     private const double CornerPadding = Reticle.Tokens.Space.S3;
@@ -76,13 +80,22 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         Deactivated += (_, _) => CloseCornerPicker();
     }
 
-    // colori di serie fissi (RAM viola, temperature ambra): categorie, non stati, quindi non vengono dal tema; sul chiaro
-    // quelli del tema scuro si leggono poco e passano a tonalità più scure. CPU, GPU, NET e DSK seguono già i toni del tema.
+    // colori di serie fissi (RAM viola, temperature ambra, i tre processi seguiti nelle barre dei core): categorie, non stati,
+    // quindi non vengono dal tema; sul chiaro quelli del tema scuro si leggono poco e passano a tonalità più scure. CPU, GPU, NET e
+    // DSK seguono già i toni del tema.
     private void UpdateSeriesBrushes()
     {
         bool light = Reticle.Wpf.ThemeManager.Current.Palette.IsLight;
         Resources["RamBrush"] = Frozen(light ? System.Windows.Media.Color.FromRgb(0x7C, 0x3A, 0xED) : System.Windows.Media.Color.FromRgb(0xB9, 0x87, 0xF7));
         Resources["TempBrush"] = Frozen(light ? System.Windows.Media.Color.FromRgb(0xC2, 0x41, 0x0C) : System.Windows.Media.Color.FromRgb(0xFF, 0x8A, 0x1F));
+        var processes = new System.Windows.Media.Brush[]
+        {
+            Frozen(light ? System.Windows.Media.Color.FromRgb(0xC2, 0x18, 0x5B) : System.Windows.Media.Color.FromRgb(0xFF, 0x6E, 0xB4)),
+            Frozen(light ? System.Windows.Media.Color.FromRgb(0x5B, 0x8C, 0x00) : System.Windows.Media.Color.FromRgb(0xB8, 0xE5, 0x5C)),
+            Frozen(light ? System.Windows.Media.Color.FromRgb(0x39, 0x49, 0xAB) : System.Windows.Media.Color.FromRgb(0x8C, 0x9E, 0xFF))
+        };
+        for (int i = 0; i < processes.Length; i++) Resources[$"ProcessBrush{i}"] = processes[i];
+        CoreBars.ShareFills = processes;
     }
 
     private static System.Windows.Media.SolidColorBrush Frozen(System.Windows.Media.Color color)
@@ -140,6 +153,7 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         {
             CpuValue.Text = $"{_metrics.Cpu:0.0}%";
             CoreBars.Values = _metrics.CpuCores;
+            CoreBars.Shares = _metrics.CpuCoreShares;
             CpuCoresText.Text = _metrics.CpuCores.Length > 0 ? $"≈ {_metrics.CpuCoresInUse:0.0} core in uso" : "";
             RamValue.Text = $"{_metrics.RamUsedPercent:0}%";
             RamUsed.Text = $"{_metrics.RamUsedGb:0.0} / {_metrics.RamTotalGb:0.0} GB";
@@ -166,8 +180,16 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         int physical = _metrics.CpuCorePhysical.Distinct().Count();
         var cores = physical < logical ? $"core logici ({logical}, su {physical} core fisici)" : $"core ({logical})";
         var bars = physical < logical ? "una barra per core logico, attaccate quelle dello stesso core fisico" : "una barra per core";
+        var colors = _metrics.CoreSamplingError switch
+        {
+            0 => "\nColori: la parte di ogni core usata dai primi tre processi di Top CPU (il quadratino accanto al nome), " +
+                 "campionata dal kernel 100 volte al secondo; il resto nel colore della CPU.",
+            5 => "\nPer vedere nei colori quali processi di Top CPU occupano i core, Pulse va avviato come amministratore.",
+            -1 => "",
+            int error => $"\nColori dei processi non disponibili: il campionamento del kernel non è partito (errore {error})."
+        };
         return $"Somma dei carichi dei {cores}: quanti core pieni vale il lavoro in corso.\n" +
-               $"Sotto il grafico {bars}: tante barre medie vogliono dire lavoro parallelo, una sola piena un thread solo.";
+               $"Sotto il grafico {bars}: tante barre medie vogliono dire lavoro parallelo, una sola piena un thread solo." + colors;
     }
 
     private string BuildPowerEstimate()
@@ -311,11 +333,17 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         try
         {
             await Task.Run(() => _proc.Update());
-            TopCpuList.ItemsSource = _proc.TopByCpu.Select(p => new ProcessRow
+            var topCpu = _proc.TopByCpu;
+            TrackLeaders(topCpu);
+            // in core (secondi di CPU al secondo), come le barre: su 32 core logici un thread pieno vale 1, non il 3 %
+            int processors = Environment.ProcessorCount;
+            TopCpuList.ItemsSource = topCpu.Select(p => new ProcessRow
             {
                 Pid = p.Pid,
                 Name = p.Name,
-                Value = $"{p.CpuPercent,5:0.0}%"
+                Value = $"{p.CpuPercent * processors / 100:0.00} core",
+                Tip = $"{p.CpuPercent:0.0} % della CPU",
+                Slot = _metrics.CoreSamplingActive ? Array.IndexOf(_slotPids, p.Pid) : -2
             }).ToArray();
             TopRamList.ItemsSource = _proc.TopByMemory.Select(p => new ProcessRow
             {
@@ -334,6 +362,18 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             sw.Stop();
             PerfLog.LogSlow("TickProcesses", sw.ElapsedMilliseconds, 200);
         }
+    }
+
+    // i primi tre di Top CPU nei colori delle barre dei core: chi esce libera il suo colore, chi entra prende uno libero
+    private void TrackLeaders(IReadOnlyList<ProcessSample> top)
+    {
+        if (!_metrics.CoreSamplingActive) return;
+        var leaders = top.Take(CoreSampler.Slots).Select(p => p.Pid).ToArray();
+        for (int s = 0; s < _slotPids.Length; s++)
+            if (Array.IndexOf(leaders, _slotPids[s]) < 0) _slotPids[s] = -1;
+        foreach (int pid in leaders)
+            if (Array.IndexOf(_slotPids, pid) < 0) _slotPids[Array.IndexOf(_slotPids, -1)] = pid;
+        _metrics.TrackProcesses(_slotPids);
     }
 
     private async void BuildDriveList()
@@ -682,6 +722,9 @@ internal sealed class ProcessRow
     public int Pid { get; init; }
     public string Name { get; init; } = string.Empty;
     public string Value { get; init; } = string.Empty;
+    public string? Tip { get; init; }
+    /// <summary>Solo Top CPU: il colore del processo nelle barre dei core (0–2), -1 se non è seguito, -2 senza campionamento.</summary>
+    public int Slot { get; init; } = -2;
 }
 
 internal sealed class DriveRow

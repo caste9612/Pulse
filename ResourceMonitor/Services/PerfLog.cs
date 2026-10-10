@@ -24,6 +24,19 @@ public static class PerfLog
         catch { }
     }
 
+    /// <summary>Una riga per un fatto raro che spiega un comportamento (un servizio che non parte), non per i tempi.</summary>
+    public static void Note(string text)
+    {
+        try
+        {
+            lock (_lock)
+            {
+                File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss.fff} {text}{Environment.NewLine}");
+            }
+        }
+        catch { }
+    }
+
     public static string LogFilePath => LogPath;
 
     public static void Clear()

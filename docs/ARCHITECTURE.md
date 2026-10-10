@@ -66,11 +66,11 @@ Different metrics update at different rates to balance freshness vs CPU cost:
 
 The 1 s tick is cheap enough to run on the UI thread. All slower work happens on `Task.Run` background threads, and the UI thread only does the final text/sparkline updates.
 
-Performance log: ticks that exceed thresholds (50 ms metrics tick, 200 ms hardware/network/process ticks, 500 ms whole slow tick) get logged to `%TEMP%\pulse-perf.log` for debugging UI freezes.
+Performance log: ticks that exceed thresholds (50 ms metrics tick, 200 ms hardware/network/process ticks, 500 ms whole slow tick) get logged to `%TEMP%\pulse-perf.log` for debugging UI freezes. The same file gets a line when the core sampling of an elevated Pulse can't start or delivers no samples (see "Which process runs on which core").
 
 ## Data flow
 
-1. **MetricsService timer fires** (1 s, UI thread) → `NativeMetrics` reads the CPU times (`GetSystemTimes`), the times of every logical processor (`NtQuerySystemInformation`, `SystemProcessorPerformanceInformation`), memory (`GlobalMemoryStatusEx`, `GetPerformanceInfo`), the system-wide I/O byte counters (`NtQuerySystemInformation`, `SystemPerformanceInformation`), the network interface table (`GetIfTable2`) and the CPU clock (`CallNtPowerInformation`). CPU %, the per-core loads and the disk/network rates come from the delta with the previous sample. Which logical processors share a physical core is read once, at startup (`GetLogicalProcessorInformationEx`).
+1. **MetricsService timer fires** (1 s, UI thread) → `NativeMetrics` reads the CPU times (`GetSystemTimes`), the times of every logical processor (`NtQuerySystemInformation`, `SystemProcessorPerformanceInformation`), memory (`GlobalMemoryStatusEx`, `GetPerformanceInfo`), the system-wide I/O byte counters (`NtQuerySystemInformation`, `SystemPerformanceInformation`), the network interface table (`GetIfTable2`) and the CPU clock (`CallNtPowerInformation`). CPU %, the per-core loads and the disk/network rates come from the delta with the previous sample. Which logical processors share a physical core is read once, at startup (`GetLogicalProcessorInformationEx`). With Pulse elevated, `CoreSampler` adds which processes ran on each core (see below).
 2. Raises `Updated` event.
 3. `MainWindow.OnMetricsUpdated` updates TextBlocks, assigns a fresh `ToArray()` of each 60-value history to `Sparkline.Values` and the fresh per-core array to `CoreBars.Values` (both trigger `OnRender`).
 4. **Slow tick fires** (2 s, separate timer) → background `Task.Run(_hw.Update)` (LHM), then `_net.UpdateAsync()`, then back on the UI thread to update temp/clock/watt/IP labels.
@@ -92,6 +92,20 @@ The gradient and halo brushes are cached and rebuilt only when the colour change
 `Values` is registered with `FrameworkPropertyMetadataOptions.AffectsRender`, so any assignment re-triggers render. The MainWindow assigns a fresh `ToArray()` of each history every tick.
 
 `Controls/CoreBars.cs`, under the CPU sparkline, works the same way: one bar per logical processor from the latest sample (no history, no animation), the threads of one physical core side by side, a track in the series colour at 10 % and the fill from the bottom. Gaps and edges are rounded to device pixels, so the narrow bars stay sharp at any scale.
+
+## Which process runs on which core
+
+Windows keeps no cheap answer to "which process is on which core": the scheduler moves threads between cores all the time. `Services/CoreSampler.cs` asks the kernel for samples instead, the way profilers do:
+
+- At startup it opens a real-time ETW session in system-logger mode (`EVENT_TRACE_SYSTEM_LOGGER_MODE`, so it doesn't take the single *NT Kernel Logger*), named `Pulse core sampling`, with the `PROFILE` and `THREAD` flags. Only an elevated Pulse can: otherwise `StartTrace` returns access denied, nothing starts and the core tooltip says why.
+- The profiling interval is global: Pulse sets it to 10 ms (100 samples per second per logical processor, instead of Windows' default 1 ms) and puts the previous value back on exit, unless someone else changed it meanwhile. If it can't set it, it closes the session rather than run at ten times the samples.
+- A background thread runs `ProcessTrace`. Each `SampledProfile` event says which thread was running on which processor; the thread events (`DCStart` for the threads alive at startup, then `Start` and `End`) map threads to processes, and a thread seen nowhere is looked up once with `OpenThread` + `GetProcessIdOfThread`.
+- The samples are counted per core in four columns: the three tracked processes and everything else; idle samples don't count. Every second `MetricsService` takes the shares of the last two seconds, and `CoreBars` draws them as layers inside each bar, whose height still comes from the per-core times of `NtQuerySystemInformation`.
+- `MainWindow` chooses the three tracked processes at each process tick: the first three of *Top CPU*, each keeping its colour while it stays in the first three.
+- The session is stopped on exit (`ExitApp`, with `ProcessExit` as a fallback). If Pulse is killed the session stays open without a consumer until the next start, which closes it and opens a new one.
+- `PULSE_NO_CORE_SAMPLING=1` turns it off, like `PULSE_NO_LHM` and `PULSE_NO_PROC`.
+
+Cost, measured on the Ryzen 9 7950X reference with the PC idle, an elevated build and the sampling on and off alternated in two 40 s rounds: Pulse's own CPU 3.30% of one core with it, 3.34% without (no measurable difference), private memory +1 MB. The kernel side (about 3,200 samples per second on 32 logical processors) didn't show in the system-wide busy time, whose noise on an idle PC was larger (1.5–2.9% in both cases).
 
 ## State persistence
 

@@ -7,7 +7,8 @@ using Brushes = System.Windows.Media.Brushes;
 namespace ResourceMonitor.Controls;
 
 // il carico di ogni core logico, una barra ciascuno che si riempie dal basso: i thread dello stesso core fisico stanno attaccati, tra
-// un core fisico e l'altro c'è uno stacco. La traccia è il colore delle barre al 10 % (il meter di Reticle ne ha una sola al 15 %:
+// un core fisico e l'altro c'è uno stacco. Con le quote dei processi seguiti (Shares) il riempimento va a strati: dal basso ogni
+// processo nel suo colore, sopra il resto. La traccia è il colore delle barre al 10 % (il meter di Reticle ne ha una sola al 15 %:
 // trentadue affiancate pesano di più); i bordi cadono sui pixel dello schermo, così le barre strette restano nitide a ogni scala
 public sealed class CoreBars : FrameworkElement
 {
@@ -22,6 +23,14 @@ public sealed class CoreBars : FrameworkElement
     public static readonly DependencyProperty FillProperty =
         DependencyProperty.Register(nameof(Fill), typeof(Brush), typeof(CoreBars),
             new FrameworkPropertyMetadata(Brushes.DeepSkyBlue, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public static readonly DependencyProperty SharesProperty =
+        DependencyProperty.Register(nameof(Shares), typeof(double[]), typeof(CoreBars),
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public static readonly DependencyProperty ShareFillsProperty =
+        DependencyProperty.Register(nameof(ShareFills), typeof(Brush[]), typeof(CoreBars),
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
 
     /// <summary>Carico di ogni core logico, 0–100.</summary>
     public double[]? Values
@@ -41,6 +50,20 @@ public sealed class CoreBars : FrameworkElement
     {
         get => (Brush)GetValue(FillProperty);
         set => SetValue(FillProperty, value);
+    }
+
+    /// <summary>Per ogni core, la parte del suo carico di ciascun processo seguito (tanti valori per core quanti
+    /// <see cref="ShareFills"/>, 0–1): strati dal basso nei loro colori, il resto in <see cref="Fill"/>. Null = tutto in Fill.</summary>
+    public double[]? Shares
+    {
+        get => (double[]?)GetValue(SharesProperty);
+        set => SetValue(SharesProperty, value);
+    }
+
+    public Brush[]? ShareFills
+    {
+        get => (Brush[]?)GetValue(ShareFillsProperty);
+        set => SetValue(ShareFillsProperty, value);
     }
 
     private SolidColorBrush? _trackCache;
@@ -70,6 +93,10 @@ public sealed class CoreBars : FrameworkElement
         var track = Reticle.Wpf.Palette.WithAlpha(color, 0.10);
         if (_trackCache is null || _trackCache.Color != track) _trackCache = Reticle.Wpf.Palette.Freeze(track);
 
+        var shares = Shares;
+        var shareFills = ShareFills;
+        int slots = shares is not null && shareFills is not null && shares.Length >= n * shareFills.Length ? shareFills.Length : 0;
+
         // fondo trasparente: il tooltip risponde su tutta la fila, stacchi compresi
         dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, w, h));
         double x = 0;
@@ -80,9 +107,23 @@ public sealed class CoreBars : FrameworkElement
             x += bar;
             if (right <= left) continue;
             double top = Math.Round(height * (1 - Math.Clamp(values[i] / 100, 0, 1)));
-            if (top > 0) dc.DrawRectangle(_trackCache, null, new Rect(left / scale, 0, (right - left) / scale, top / scale));
-            if (top < height) dc.DrawRectangle(fill, null, new Rect(left / scale, top / scale, (right - left) / scale, (height - top) / scale));
+            if (top > 0) Draw(dc, _trackCache, left, 0, right, top, scale);
+            // gli strati dei processi seguiti dal basso, con i bordi sui pixel: niente fessure tra uno strato e l'altro
+            double bottom = height, share = 0;
+            for (int k = 0; k < slots; k++)
+            {
+                share += Math.Clamp(shares![i * slots + k], 0, 1);
+                double layerTop = Math.Max(top, Math.Round(height - (height - top) * Math.Min(share, 1)));
+                Draw(dc, shareFills![k], left, layerTop, right, bottom, scale);
+                bottom = layerTop;
+            }
+            Draw(dc, fill, left, top, right, bottom, scale);
         }
+    }
+
+    private static void Draw(DrawingContext dc, Brush brush, double left, double top, double right, double bottom, double scale)
+    {
+        if (bottom > top) dc.DrawRectangle(brush, null, new Rect(left / scale, top / scale, (right - left) / scale, (bottom - top) / scale));
     }
 
     private static bool NewCore(int[]? cores, int i) => cores is null || i >= cores.Length || cores[i] != cores[i - 1];

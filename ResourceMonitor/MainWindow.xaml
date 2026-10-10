@@ -21,6 +21,11 @@
              RAM viola e temperature ambra non seguono l'accento: qui i valori del tema scuro, UpdateSeriesBrushes li scurisce sul chiaro -->
         <SolidColorBrush x:Key="RamBrush" Color="#B987F7"/>
         <SolidColorBrush x:Key="TempBrush" Color="#FF8A1F"/>
+        <!-- i tre processi di Top CPU seguiti nelle barre dei core: tinte che il widget non usa già (rosa, lime, pervinca), lontane
+             dal ciano della CPU; sul chiaro UpdateSeriesBrushes le scurisce -->
+        <SolidColorBrush x:Key="ProcessBrush0" Color="#FF6EB4"/>
+        <SolidColorBrush x:Key="ProcessBrush1" Color="#B8E55C"/>
+        <SolidColorBrush x:Key="ProcessBrush2" Color="#8C9EFF"/>
 
         <Style x:Key="SectionLabel" TargetType="rt:TrackedText" BasedOn="{StaticResource Reticle.Tracked.Label}">
             <Setter Property="VerticalAlignment" Value="Center"/>
@@ -75,6 +80,42 @@
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding Name}" Style="{StaticResource ProcessName}"/>
                 <TextBlock Grid.Column="1" Text="{Binding Value}" Style="{StaticResource ProcessValue}" Margin="8,0,0,0"/>
+            </Grid>
+        </DataTemplate>
+        <!-- quadratino del colore del processo nelle barre dei core (Slot 0–2): trasparente se il processo non è seguito (-1),
+             assente senza il campionamento del kernel (-2) -->
+        <Style x:Key="ProcessSwatch" TargetType="Rectangle">
+            <Setter Property="Width" Value="6"/>
+            <Setter Property="Height" Value="6"/>
+            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Fill" Value="Transparent"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Slot}" Value="-2">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Slot}" Value="0">
+                    <Setter Property="Fill" Value="{DynamicResource ProcessBrush0}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Slot}" Value="1">
+                    <Setter Property="Fill" Value="{DynamicResource ProcessBrush1}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Slot}" Value="2">
+                    <Setter Property="Fill" Value="{DynamicResource ProcessBrush2}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <!-- Top CPU: il quadratino del colore, il valore in core, la percentuale della CPU nel tooltip -->
+        <DataTemplate x:Key="CpuProcessRowTemplate">
+            <Grid Margin="0,1,0,1" Background="Transparent" ContextMenu="{StaticResource ProcessMenu}" ToolTip="{Binding Tip}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Rectangle Style="{StaticResource ProcessSwatch}"/>
+                <TextBlock Grid.Column="1" Text="{Binding Name}" Style="{StaticResource ProcessName}"/>
+                <TextBlock Grid.Column="2" Text="{Binding Value}" Style="{StaticResource ProcessValue}" Margin="8,0,0,0"/>
             </Grid>
         </DataTemplate>
     </rt:ReticleWindow.Resources>
@@ -137,7 +178,8 @@
                         <Border Grid.Column="1" Style="{StaticResource SparkBed}">
                             <ctrl:Sparkline x:Name="CpuSpark" Height="26" Stroke="{DynamicResource Reticle.Brush.Info}" MaxValue="100"/>
                         </Border>
-                        <!-- sotto il grafico il carico di ogni core logico, a sinistra quanti core pieni vale (ToolTip da MainWindow) -->
+                        <!-- sotto il grafico il carico di ogni core logico, a strati nei colori dei processi seguiti quando c'è il
+                             campionamento del kernel; a sinistra quanti core pieni vale (ToolTip da MainWindow) -->
                         <TextBlock x:Name="CpuCoresText" Grid.Row="1" Style="{StaticResource DimText}" Text=""/>
                         <ctrl:CoreBars x:Name="CoreBars" Grid.Row="1" Grid.Column="1" Height="12" Margin="14,2,0,2"
                                        Fill="{DynamicResource Reticle.Brush.Info}"/>
@@ -254,7 +296,7 @@
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <rt:Panel Grid.Column="0" Legend="Top CPU" Margin="0,0,6,0">
-                            <ItemsControl x:Name="TopCpuList" ItemTemplate="{StaticResource ProcessRowTemplate}"/>
+                            <ItemsControl x:Name="TopCpuList" ItemTemplate="{StaticResource CpuProcessRowTemplate}"/>
                         </rt:Panel>
                         <rt:Panel Grid.Column="1" Legend="Top RAM" Margin="6,0,0,0">
                             <ItemsControl x:Name="TopRamList" ItemTemplate="{StaticResource ProcessRowTemplate}"/>

@@ -13,6 +13,7 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
 
     private readonly DispatcherTimer _timer;
     private readonly NativeMetrics _native = new();
+    private readonly CoreSampler? _sampler;
 
     public double Cpu { get; private set; }
     public double[] CpuCores { get; private set; } = Array.Empty<double>();
@@ -20,6 +21,13 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     public int[] CpuCorePhysical { get; }
     /// <summary>Quanti core pieni vale il carico: la somma dei carichi dei core logici.</summary>
     public double CpuCoresInUse { get; private set; }
+    /// <summary>Per ogni core logico, la parte del carico di ciascun processo seguito (<see cref="CoreSampler.Slots"/> valori per
+    /// core, 0–1); null senza il campionamento del kernel.</summary>
+    public double[]? CpuCoreShares { get; private set; }
+    /// <summary>Esito dell'avvio del campionamento: 0 attivo, -1 spento con PULSE_NO_CORE_SAMPLING, altrimenti l'errore di Windows
+    /// (5: Pulse non è da amministratore).</summary>
+    public int CoreSamplingError { get; }
+    public bool CoreSamplingActive => _sampler is not null;
     public double GpuExternal { get; set; }
     public double VramUsedExternalGb { get; set; }
     public double RamUsedPercent { get; private set; }
@@ -64,6 +72,13 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
         _native.GetCpuPercent();
         // idem per i singoli core; quali core logici stanno sullo stesso core fisico non cambia, si legge una volta
         CpuCorePhysical = NativeMetrics.GetPhysicalCores(_native.GetCoreLoads().Length);
+        // quale processo gira su quale core: solo da amministratore (vedi CoreSampler)
+        if (Environment.GetEnvironmentVariable("PULSE_NO_CORE_SAMPLING") == "1") CoreSamplingError = -1;
+        else
+        {
+            _sampler = CoreSampler.TryStart(CpuCorePhysical.Length, out int error);
+            CoreSamplingError = error;
+        }
         // Prime disk/net baselines pure (le rate richiedono 2 sample)
         _native.GetDiskRates();
         _native.GetNetworkRates();
@@ -92,6 +107,7 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
             Cpu = _native.GetCpuPercent();
             CpuCores = _native.GetCoreLoads();
             CpuCoresInUse = CpuCores.Sum() / 100;
+            CpuCoreShares = _sampler?.TakeShares();
 
             var mem = _native.GetMemory();
             RamUsedPercent = mem.UsedPercent;
@@ -155,8 +171,12 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     private void OnChanged([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
+    /// <summary>I processi da seguire nel campionamento dei core, uno per colore (-1 = colore libero).</summary>
+    public void TrackProcesses(int[] pids) => _sampler?.Track(pids);
+
     public void Dispose()
     {
         _timer.Stop();
+        _sampler?.Dispose();
     }
 }
