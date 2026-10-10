@@ -70,7 +70,7 @@ Performance log: ticks that exceed thresholds (50 ms metrics tick, 200 ms hardwa
 
 ## Data flow
 
-1. **MetricsService timer fires** (1 s, UI thread) → `NativeMetrics` reads the CPU times (`GetSystemTimes`), the times of every logical processor (`NtQuerySystemInformation`, `SystemProcessorPerformanceInformation`), memory (`GlobalMemoryStatusEx`, `GetPerformanceInfo`), the system-wide I/O byte counters (`NtQuerySystemInformation`, `SystemPerformanceInformation`), the network interface table (`GetIfTable2`) and the CPU clock (`CallNtPowerInformation`). CPU %, the per-core loads and the disk/network rates come from the delta with the previous sample. Which logical processors share a physical core is read once, at startup (`GetLogicalProcessorInformationEx`). With Pulse elevated, `CoreSampler` adds which processes ran on each core (see below).
+1. **MetricsService timer fires** (1 s, UI thread) → `NativeMetrics` reads the CPU times (`GetSystemTimes`), the times of every logical processor (`NtQuerySystemInformation`, `SystemProcessorPerformanceInformation`), memory (`GlobalMemoryStatusEx`, `GetPerformanceInfo` for the committed memory, `NtQuerySystemInformation` for the memory lists, `SystemMemoryListInformation`, and the page files, `SystemPageFileInformation`), the system-wide I/O byte counters (`NtQuerySystemInformation`, `SystemPerformanceInformation`), the network interface table (`GetIfTable2`) and the CPU clock (`CallNtPowerInformation`). CPU %, the per-core loads and the disk/network rates come from the delta with the previous sample. Which logical processors share a physical core is read once, at startup (`GetLogicalProcessorInformationEx`). With Pulse elevated, `CoreSampler` adds which processes ran on each core (see below).
 2. Raises `Updated` event.
 3. `MainWindow.OnMetricsUpdated` updates TextBlocks, assigns a fresh `ToArray()` of each 60-value history to `Sparkline.Values` and the fresh per-core array to `CoreBars.Values` (both trigger `OnRender`).
 4. **Slow tick fires** (2 s, separate timer) → background `Task.Run(_hw.Update)` (LHM), then `_net.UpdateAsync()`, then back on the UI thread to update temp/clock/watt/IP labels.
@@ -92,6 +92,8 @@ The gradient and halo brushes are cached and rebuilt only when the colour change
 `Values` is registered with `FrameworkPropertyMetadataOptions.AffectsRender`, so any assignment re-triggers render. The MainWindow assigns a fresh `ToArray()` of each history every tick.
 
 `Controls/CoreBars.cs`, under the CPU sparkline, works the same way: one bar per logical processor from the latest sample (no history, no animation), the threads of one physical core side by side, a track in the series colour at 10 % and the fill from the bottom. Gaps and edges are rounded to device pixels, so the narrow bars stay sharp at any scale.
+
+`Controls/MemoryBar.cs`, under the RAM sparkline, is the composition bar of Task Manager drawn the same way: in use, modified, standby (shown as "in cache") and free from the left, in the RAM colour at 100 %, 60 %, 30 % and 10 % (the free part is the track), with a 1 px gap between parts. "In use" is what the memory lists leave: total minus free, modified and standby.
 
 ## Which process runs on which core
 

@@ -64,7 +64,7 @@ A full performance log lives in `%TEMP%\pulse-perf.log`: any tick that exceeds 5
 ## Features
 
 - **CPU**: usage %, current clock (GHz), temperature, power (W) — see "Running as administrator" below; under the graph one bar per logical processor (threads of the same core side by side) and the load counted in full cores, to see how parallel the work is; as administrator the bars also show, in colour, how much of each core the busiest processes of *Top CPU* take (up to three, from half a core up)
-- **RAM**: usage %, used/total GB, cached, committed, page file %
+- **RAM**: usage %, used/total GB, available GB and, under the graph, the composition bar of Task Manager (in use, modified, cached, free); the tooltip explains each part and adds committed memory and page file usage
 - **GPU**: usage %, VRAM used/total, temperature, core/memory clocks, power (W)
 - **Network**: ↓/↑ throughput, Wi-Fi SSID/signal, local IP, public IP, ping to 8.8.8.8
 - **Disk**: total ↓/↑ throughput, per-drive free space + bar, SSD temp (when LHM Storage is enabled)

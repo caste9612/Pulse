@@ -30,6 +30,7 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
     private bool _slowRunning;
     private bool _procRunning;
     private bool _cornerPickerOpen;
+    private bool _ramTipOpen;
 
     // il processo di ogni colore nelle barre dei core (-1 = colore libero): fino a tre processi di Top CPU sopra il mezzo core,
     // ciascuno col suo colore finché non scende sotto un quarto di core, anche se cambia posto
@@ -58,6 +59,13 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
 
         CoreBars.Cores = _metrics.CpuCorePhysical;
         CpuCoresText.ToolTip = CoreBars.ToolTip = BuildCoresTooltip();
+
+        // il tooltip della RAM si rifà a ogni secondo, ma non mentre è aperto: chi lo sta leggendo non lo vede cambiare
+        foreach (var host in new FrameworkElement[] { RamAvailableText, RamBar })
+        {
+            host.ToolTipOpening += (_, _) => _ramTipOpen = true;
+            host.ToolTipClosing += (_, _) => _ramTipOpen = false;
+        }
 
         _machineBoot = DateTime.Now - TimeSpan.FromMilliseconds(Environment.TickCount64);
 
@@ -128,8 +136,6 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         _suppressSave = false;
         _settingsLoaded = true;
 
-        if (_metrics.RamTotalGb > 0)
-            RamDetail.Text = $"Totale {_metrics.RamTotalGb:0.0} GB";
         _slowTimer.Start();
         _procTimer.Start();
         _driveTimer.Start();
@@ -170,7 +176,11 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             NetSpark.Values = _metrics.NetHistory.ToArray();
             DiskSpark.Values = _metrics.DiskHistory.ToArray();
 
-            RamDetail.Text = BuildRamDetail();
+            RamAvailableText.Text = $"{_metrics.RamAvailableGb:0.0} GB disponibili";
+            RamBar.Parts = double.IsNaN(_metrics.RamInUseGb)
+                ? new[] { _metrics.RamUsedGb, 0, 0, _metrics.RamAvailableGb }   // senza le liste della memoria: usata e disponibile
+                : new[] { _metrics.RamInUseGb, _metrics.RamModifiedGb, _metrics.RamStandbyGb, _metrics.RamFreeGb };
+            if (!_ramTipOpen) RamAvailableText.ToolTip = RamBar.ToolTip = BuildRamTooltip();
             UptimeText.Text = BuildUptime();
         });
     }
@@ -230,17 +240,29 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         return $"VRAM {usedGb:F1} GB";
     }
 
-    private string BuildRamDetail()
+    // le parti della barra della RAM spiegate, poi la memoria impegnata e il file di paging (prima erano sigle nella riga)
+    private string BuildRamTooltip()
     {
-        var parts = new List<string>();
-        if (_metrics.RamTotalGb > 0) parts.Add($"Totale {_metrics.RamTotalGb:0.0}G");
-        if (_metrics.RamAvailableGb > 0) parts.Add($"Disp {_metrics.RamAvailableGb:0.0}G");
-        if (_metrics.RamCachedGb > 0) parts.Add($"Cache {_metrics.RamCachedGb:0.0}G");
-        if (_metrics.RamCommittedGb > 0)
-            parts.Add($"Commit {_metrics.RamCommittedGb:0.0}/{_metrics.RamCommitLimitGb:0.0}G");
-        if (_metrics.PageFilePercent > 0)
-            parts.Add($"PF {_metrics.PageFilePercent:0}%");
-        return string.Join("  •  ", parts);
+        var m = _metrics;
+        var lines = new List<string>();
+        if (!double.IsNaN(m.RamInUseGb))
+        {
+            lines.Add($"In uso {m.RamInUseGb:0.0} GB: processi, driver e sistema.");
+            lines.Add($"Modificata {m.RamModifiedGb:0.0} GB: da scrivere su disco prima di poterla riusare.");
+            lines.Add($"In cache {m.RamStandbyGb:0.0} GB: dati e programmi tenuti pronti, Windows la rende appena serve.");
+            lines.Add($"Libera {m.RamFreeGb:0.0} GB.");
+            lines.Add($"Disponibili {m.RamAvailableGb:0.0} GB: la cache più la libera, quello che i programmi possono ancora prendere.");
+        }
+        else
+        {
+            lines.Add($"Usata {m.RamUsedGb:0.0} GB, disponibili {m.RamAvailableGb:0.0} GB.");
+        }
+        if (m.RamCommitLimitGb > 0)
+            lines.Add($"Memoria impegnata {m.RamCommittedGb:0.0} di {m.RamCommitLimitGb:0.0} GB: quella chiesta dai programmi, sul limite di RAM più file di paging.");
+        lines.Add(m.PageFileTotalGb > 0
+            ? $"File di paging: {m.PageFileUsedGb:0.00} GB in uso di {m.PageFileTotalGb:0.0} GB."
+            : "Nessun file di paging.");
+        return string.Join("\n", lines);
     }
 
     private string BuildUptime()

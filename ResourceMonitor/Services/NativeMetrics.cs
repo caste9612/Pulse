@@ -121,15 +121,23 @@ public sealed class NativeMetrics
         public double AvailableGb;
         public double UsedGb;
         public double UsedPercent;
-        public double CachedGb;
+        // la composizione della barra "Composizione memoria" di Gestione attività; NaN se Windows non dà le liste
+        public double InUseGb;
+        public double ModifiedGb;
+        public double StandbyGb;
+        public double FreeGb;
         public double CommittedGb;
         public double CommitLimitGb;
-        public double PageFilePercent;
+        public double PageFileUsedGb;
+        public double PageFileTotalGb;
     }
+
+    private readonly byte[] _memoryListBuf = new byte[176];
+    private readonly byte[] _pageFileBuf = new byte[4096];
 
     public MemoryInfo GetMemory()
     {
-        var info = new MemoryInfo();
+        var info = new MemoryInfo { InUseGb = double.NaN, ModifiedGb = double.NaN, StandbyGb = double.NaN, FreeGb = double.NaN };
 
         var ms = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
         if (GlobalMemoryStatusEx(ref ms))
@@ -138,19 +146,21 @@ public sealed class NativeMetrics
             info.AvailableGb = ms.ullAvailPhys / 1024d / 1024d / 1024d;
             info.UsedGb = info.TotalGb - info.AvailableGb;
             info.UsedPercent = ms.dwMemoryLoad;
+        }
 
-            double pageFileTotal = ms.ullTotalPageFile;
-            double pageFileAvail = ms.ullAvailPageFile;
-            if (pageFileTotal > 0)
-            {
-                // Pagefile usage = (totale page+phys - disponibile page+phys) - (totale phys - disp phys), divided by file portion
-                // Approssimazione: % use of page file = used_pf / total_pf
-                // total_pf reale = ullTotalPageFile - ullTotalPhys
-                double pagefileBytes = pageFileTotal - ms.ullTotalPhys;
-                double pagefileUsed = (pageFileTotal - pageFileAvail) - (ms.ullTotalPhys - ms.ullAvailPhys);
-                if (pagefileBytes > 0 && pagefileUsed > 0)
-                    info.PageFilePercent = Math.Clamp(pagefileUsed / pagefileBytes * 100, 0, 100);
-            }
+        double page = Environment.SystemPageSize / 1024d / 1024d / 1024d;
+
+        // liste della memoria (SystemMemoryListInformation, classe 80), in pagine: ZeroPageCount (0), FreePageCount (8),
+        // ModifiedPageCount (16), ModifiedNoWritePageCount (24), BadPageCount (32), PageCountByPriority[8] (40, lo standby).
+        // "In uso" è quello che resta, come in Gestione attività
+        if (info.TotalGb > 0 && Query(80, _memoryListBuf))
+        {
+            double standby = 0;
+            for (int i = 0; i < 8; i++) standby += BitConverter.ToUInt64(_memoryListBuf, 40 + 8 * i);
+            info.FreeGb = (BitConverter.ToUInt64(_memoryListBuf, 0) + BitConverter.ToUInt64(_memoryListBuf, 8)) * page;
+            info.ModifiedGb = (BitConverter.ToUInt64(_memoryListBuf, 16) + BitConverter.ToUInt64(_memoryListBuf, 24)) * page;
+            info.StandbyGb = standby * page;
+            info.InUseGb = Math.Max(0, info.TotalGb - info.FreeGb - info.ModifiedGb - info.StandbyGb);
         }
 
         if (GetPerformanceInfo(out var pi, Marshal.SizeOf<PERFORMANCE_INFORMATION>()))
@@ -158,10 +168,34 @@ public sealed class NativeMetrics
             double pageSize = pi.PageSize.ToInt64();
             info.CommittedGb = pi.CommitTotal.ToInt64() * pageSize / 1024d / 1024d / 1024d;
             info.CommitLimitGb = pi.CommitLimit.ToInt64() * pageSize / 1024d / 1024d / 1024d;
-            info.CachedGb = pi.SystemCache.ToInt64() * pageSize / 1024d / 1024d / 1024d;
+        }
+
+        // file di paging (SystemPageFileInformation, classe 18): uno struct per file con NextEntryOffset (0), TotalSize (4) e
+        // TotalInUse (8) in pagine. Prima l'uso si stimava come impegnata meno RAM usata, che superava il file e dava 100 %
+        if (Query(18, _pageFileBuf))
+        {
+            double total = 0, inUse = 0;
+            for (int offset = 0; offset + 12 <= _pageFileBuf.Length;)
+            {
+                total += BitConverter.ToUInt32(_pageFileBuf, offset + 4);
+                inUse += BitConverter.ToUInt32(_pageFileBuf, offset + 8);
+                int next = BitConverter.ToInt32(_pageFileBuf, offset);
+                if (next <= 0) break;
+                offset += next;
+            }
+            info.PageFileTotalGb = total * page;
+            info.PageFileUsedGb = inUse * page;
         }
 
         return info;
+    }
+
+    private static bool Query(int sysClass, byte[] buf)
+    {
+        Array.Clear(buf);
+        var handle = GCHandle.Alloc(buf, GCHandleType.Pinned);
+        try { return NtQuerySystemInformation(sysClass, handle.AddrOfPinnedObject(), buf.Length, out _) == 0; }
+        finally { handle.Free(); }
     }
 
     // ===== DISK =====

@@ -188,23 +188,29 @@
                     <Rectangle Style="{StaticResource MetricDivider}"/>
 
                     <!-- RAM -->
-                    <StackPanel>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <rt:TrackedText Text="RAM" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource RamBrush}"/>
-                                <TextBlock x:Name="RamValue" Style="{StaticResource BigValue}" Text="—"/>
-                                <TextBlock x:Name="RamUsed" Style="{StaticResource InfoText}" Margin="10,0,0,0" Text=""/>
-                            </StackPanel>
-                            <Border Grid.Column="1" Style="{StaticResource SparkBed}">
-                                <ctrl:Sparkline x:Name="RamSpark" Height="26" Stroke="{DynamicResource RamBrush}" MaxValue="100"/>
-                            </Border>
-                        </Grid>
-                        <TextBlock x:Name="RamDetail" Style="{StaticResource DimText}" Text="" Margin="0,0,0,2"/>
-                    </StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <rt:TrackedText Text="RAM" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource RamBrush}"/>
+                            <TextBlock x:Name="RamValue" Style="{StaticResource BigValue}" Text="—"/>
+                            <TextBlock x:Name="RamUsed" Style="{StaticResource InfoText}" Margin="10,0,0,0" Text=""/>
+                        </StackPanel>
+                        <Border Grid.Column="1" Style="{StaticResource SparkBed}">
+                            <ctrl:Sparkline x:Name="RamSpark" Height="26" Stroke="{DynamicResource RamBrush}" MaxValue="100"/>
+                        </Border>
+                        <!-- sotto il grafico la composizione della memoria come in Gestione attività, a sinistra quanta ne resta da
+                             usare; il dettaglio (le quattro parti, impegnata, file di paging) nel tooltip, da MainWindow -->
+                        <TextBlock x:Name="RamAvailableText" Grid.Row="1" Style="{StaticResource DimText}" Text="" Margin="0,0,0,2"/>
+                        <ctrl:MemoryBar x:Name="RamBar" Grid.Row="1" Grid.Column="1" Height="8" Margin="14,0,0,2" VerticalAlignment="Center"
+                                        Fill="{DynamicResource RamBrush}"/>
+                    </Grid>
 
                     <Rectangle Style="{StaticResource MetricDivider}"/>
 

@@ -38,10 +38,15 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     public double RamUsedGb { get; private set; }
     public double RamTotalGb { get; private set; }
     public double RamAvailableGb { get; private set; }
-    public double RamCachedGb { get; private set; }
+    /// <summary>Composizione della RAM come in Gestione attività (in uso, modificata, in cache, libera); NaN senza le liste.</summary>
+    public double RamInUseGb { get; private set; } = double.NaN;
+    public double RamModifiedGb { get; private set; } = double.NaN;
+    public double RamStandbyGb { get; private set; } = double.NaN;
+    public double RamFreeGb { get; private set; } = double.NaN;
     public double RamCommittedGb { get; private set; }
     public double RamCommitLimitGb { get; private set; }
-    public double PageFilePercent { get; private set; }
+    public double PageFileUsedGb { get; private set; }
+    public double PageFileTotalGb { get; private set; }
     public double CpuFreqMhz { get; private set; }
     public double Gpu { get; private set; }
     public double VramUsedGb { get; private set; }
@@ -115,10 +120,14 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
             RamUsedPercent = mem.UsedPercent;
             RamUsedGb = mem.UsedGb;
             RamAvailableGb = mem.AvailableGb;
-            RamCachedGb = mem.CachedGb;
+            RamInUseGb = mem.InUseGb;
+            RamModifiedGb = mem.ModifiedGb;
+            RamStandbyGb = mem.StandbyGb;
+            RamFreeGb = mem.FreeGb;
             RamCommittedGb = mem.CommittedGb;
             RamCommitLimitGb = mem.CommitLimitGb;
-            PageFilePercent = mem.PageFilePercent;
+            PageFileUsedGb = mem.PageFileUsedGb;
+            PageFileTotalGb = mem.PageFileTotalGb;
 
             CpuFreqMhz = _native.GetCpuFreqMhz();
 

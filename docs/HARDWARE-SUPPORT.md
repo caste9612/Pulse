@@ -12,7 +12,7 @@ Which sensors work on which hardware, and why some need extra software.
 | CPU clock GHz | LibreHardwareMonitorLib per-core clocks (the highest); fallback `CallNtPowerInformation` (average current MHz) | per-core clocks: **signed kernel driver + admin**; fallback: nothing |
 | CPU temperature | LibreHardwareMonitorLib via MSR | **signed kernel driver + admin** |
 | CPU package power | LibreHardwareMonitorLib via MSR | **signed kernel driver + admin** |
-| RAM (all metrics) | `GlobalMemoryStatusEx` + `GetPerformanceInfo` | nothing |
+| RAM (all metrics) | `GlobalMemoryStatusEx` + `GetPerformanceInfo` (committed memory); `NtQuerySystemInformation` for the memory lists (in use, modified, standby, free) and the page file usage | nothing |
 | GPU usage / temp / clock / VRAM (NVIDIA) | LibreHardwareMonitorLib via NVAPI | NVIDIA driver (anyone has it) |
 | GPU usage / temp / clock / VRAM (AMD) | LibreHardwareMonitorLib via ADL | AMD driver (anyone has it) |
 | GPU power (W) | LibreHardwareMonitorLib | NVIDIA/AMD driver |
