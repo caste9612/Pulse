@@ -1,6 +1,6 @@
 # Reticle (binary)
 
-Release build of **Reticle v0.5.0** (commit `5c65e03`), the author's WPF design system that Pulse's UI is built on. The Reticle source is not public; these two assemblies let Pulse build anywhere, CI included, without access to it.
+Release build of **Reticle v0.6.0** (commit `52bfc18`), the author's WPF design system that Pulse's UI is built on. The Reticle source is not public; these two assemblies let Pulse build anywhere, CI included, without access to it.
 
 | File | Contents |
 |---|---|

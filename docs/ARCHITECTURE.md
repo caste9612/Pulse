@@ -112,10 +112,11 @@ The appearance (theme, accent, transparency, fill, density) is saved by Reticle 
 
 ## UI: Reticle
 
-From v1.2.0 the widget is built on Reticle, the author's WPF design system (v0.5.0, as the two DLLs in `lib/Reticle`, updated with `scripts/update-reticle.ps1`):
+From v1.2.0 the widget is built on Reticle, the author's WPF design system (v0.6.0, as the two DLLs in `lib/Reticle`, updated with `scripts/update-reticle.ps1`):
 
 - `App.xaml` merges `ReticleTheme` (the app defaults: dark, green accent, Mica, compact) and `ReticleControls`; `App.OnStartup` loads the user's choices with `ThemeManager.Current.Initialize(new JsonThemeSettingsStore("Pulse"))`, i.e. `%LOCALAPPDATA%\Pulse\reticle-theme.json`.
 - `MainWindow` is a `ReticleWindow` without caption bar (`ShowCaption="False"`) that hosts a `TickBorder` frame: the widget pattern of Reticle. No `AllowsTransparency`, no `DropShadowEffect`: the transparency is the Windows 11 backdrop (Mica by default, Acrylic or opaque from *Aspetto...*), composed by DWM instead of copied back from the GPU on every update.
+- Since Reticle 0.6.0 there is no WPF `WindowChrome` either: `ReticleWindow` answers `WM_NCCALCSIZE` (the whole window is client area) and `WM_NCHITTEST` (6-unit resize borders) itself. With `ShowCaption="False"` its drag area is 0 high, so dragging the header and double-clicking it stay Pulse's own handlers.
 - The tray menu switches the theme (*Tema*); *Aspetto...* opens Reticle's `AppearanceSettingsView`. Every change is applied live and saved.
 - Series colours: CPU, GPU, NET and DSK use the theme tones (info, success, warning, danger); RAM violet and temperature amber are fixed categories, with darker shades on the light theme (`MainWindow.UpdateSeriesBrushes`).
 - Reticle's animations and timers run only while the widget is on screen. Pulse's own polling keeps running while the widget is hidden in the tray, so the values are current when it comes back: hidden costs less CPU than visible, not zero (see the v1.2.0 figures in the README).
