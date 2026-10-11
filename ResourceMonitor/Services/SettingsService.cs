@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace ResourceMonitor.Services;
@@ -57,5 +60,35 @@ public static class SettingsService
             File.WriteAllText(SettingsPath, JsonSerializer.Serialize(settings, JsonOpts));
         }
         catch { }
+    }
+
+    /// <summary>Una ripartenza dopo un crash (dal task "Pulse riavvio") è ammessa se nei dieci minuti prima ce ne sono state meno
+    /// di tre, e in quel caso la si annota: un Pulse che va in crash appena parte non riparte all'infinito.</summary>
+    public static bool AllowCrashRestart()
+    {
+        var path = Path.Combine(NewDir, "riavvii-dopo-crash.txt");
+        try
+        {
+            var now = DateTime.UtcNow;
+            var recent = new List<DateTime>();
+            if (File.Exists(path))
+            {
+                foreach (var line in File.ReadAllLines(path))
+                {
+                    if (DateTime.TryParse(line, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var when) &&
+                        now - when < TimeSpan.FromMinutes(10))
+                        recent.Add(when);
+                }
+            }
+            if (recent.Count >= 3) return false;
+            recent.Add(now);
+            Directory.CreateDirectory(NewDir);
+            File.WriteAllLines(path, recent.Select(t => t.ToString("O", CultureInfo.InvariantCulture)));
+            return true;
+        }
+        catch
+        {
+            return true;
+        }
     }
 }

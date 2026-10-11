@@ -10,13 +10,14 @@ What `Setup-Pulse-vX.Y.Z.exe` does and how it works.
 4. Choose options:
    - ☐ Start with Windows (regular user privileges)
    - ☐ **Start with administrator privileges** (uses Scheduled Task — no UAC at login, enables CPU temp/power on systems with signed MSR driver)
+   - ☑ **Restart Pulse if it closes because of an error** (ticked by default; a second Scheduled Task, see [Restart after a crash](#restart-after-a-crash))
    - ☐ Create desktop shortcut
 5. Click Install → files copied
 6. Optionally launches Pulse at end of install
 
 With both startup options ticked, only the Scheduled Task is created: the `Run` value is written for *Start with Windows* alone.
 
-Uninstall via Settings → Apps removes the program, the shortcuts, the autostart value written by the installer and the Scheduled Task. Settings (`%APPDATA%\Pulse`) and appearance (`%LOCALAPPDATA%\Pulse`) stay, so a reinstall finds them.
+Uninstall via Settings → Apps removes the program, the shortcuts, the autostart value written by the installer and both Scheduled Tasks. Settings (`%APPDATA%\Pulse`) and appearance (`%LOCALAPPDATA%\Pulse`) stay, so a reinstall finds them.
 
 ## Per-user vs system-wide
 
@@ -25,7 +26,7 @@ Default: **per-user install** (no UAC).
 - Files go to `%LocalAppData%\Programs\Pulse\`
 - Shortcuts in user Start Menu
 - Uninstall entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall`; autostart, if chosen, as the `Pulse` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-- Scheduled Task created under the current user's account
+- Scheduled Tasks created under the current user's account
 
 The installer also offers *Install for all users* (`PrivilegesRequiredOverridesAllowed=dialog`): UAC prompts and the Start Menu shortcuts go to the All Users profile, but the default folder stays `{userpf}\Pulse`, the `%LocalAppData%\Programs\Pulse` of the account that elevates. Installing into `%ProgramFiles%\Pulse` would take `{autopf}` in `DefaultDirName`.
 
@@ -42,16 +43,26 @@ The **Scheduled Task with `RunLevel = Highest`** workaround:
 
 Result: at every Windows login, Windows itself launches Pulse with admin token, no UAC. This is the standard trick used by HWiNFO64, ThrottleStop, MSI Afterburner, and others.
 
-Created via the Inno Setup `[Run]` section calling `schtasks.exe`:
+The task comes from the template `installer/task-logon.xml`, registered by `installer/register-task.ps1` (Windows PowerShell, `Register-ScheduledTask`), which fills in the exe path, the installing user and the run level. Until v1.2.0 it was a `schtasks /Create /SC ONLOGON /RL HIGHEST` and inherited the Task Scheduler defaults: stop the task after **72 hours** (so Pulse disappeared after three days without a logoff), don't start on battery, stop when the laptop is unplugged. The template sets no time limit (`ExecutionTimeLimit` `PT0S`) and keeps running on battery:
 
 ```inno
 [Run]
-Filename: "schtasks.exe"; \
-  Parameters: "/Create /TN ""{#MyAppTaskName}"" /TR ""\""{app}\{#MyAppExeName}\"""" /SC ONLOGON /RL HIGHEST /F"; \
+Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Template ""{tmp}\task-logon.xml"" -Name ""{#MyAppTaskName}"" -Exe ""{app}\{#MyAppExeName}"" -RunLevel HighestAvailable"; \
   Tasks: startup_admin; Flags: runhidden waituntilterminated
 ```
 
-Removed on uninstall via `[UninstallRun]` calling `schtasks /Delete`.
+The script and the templates go to `{tmp}` and are deleted after setup. Reinstalling over an older version replaces the task (`-Force`). Removed on uninstall via `[UninstallRun]` calling `schtasks /Delete`.
+
+## Restart after a crash
+
+On 10/10/2026 an NVIDIA driver update crashed a running Pulse four seconds later (a native access violation inside LibreHardwareMonitor's NVML call, which no .NET code can catch), and it stayed closed until it was reopened by hand, without the administrator rights. The *Restart Pulse if it closes because of an error* option registers a second task, **`Pulse riavvio`**, from `installer/task-crash.xml`:
+
+- Trigger: the event Windows writes in the Application log when a program crashes, *Application Error* 1000, filtered on `Pulse.exe`, then a 10-second delay. Windows writes it even with Windows Error Reporting turned off.
+- Action: `Pulse.exe --dopo-crash`. Pulse waits for the crashed process to be gone (single-instance mutex) and refuses a fourth restart within ten minutes, so a Pulse that crashes as soon as it starts doesn't loop: the refusal is noted in `%TEMP%\pulse-perf.log`.
+- Run level: `HighestAvailable` when *Start with administrator privileges* is ticked, `LeastPrivilege` otherwise, so Pulse comes back with the rights it normally has.
+
+Closing Pulse from the tray, or ending it from Task Manager, writes no crash event and restarts nothing. Two simpler mechanisms were tried and don't do this: the task setting *If the task fails, restart every…* only covers a task that fails to start, not a program that crashes later, and `RegisterApplicationRestart` relies on Windows Error Reporting, which is turned off on some machines (the reference PC among them).
 
 ## What's in the installer
 
@@ -66,6 +77,8 @@ Setup-Pulse-vX.Y.Z.exe (~6 MB)
 ├── docs/HARDWARE-SUPPORT.md      (so users know about Ryzen Master / HWiNFO64)
 └── unins000.exe                  (Inno Setup uninstaller)
 ```
+
+During setup only, `register-task.ps1`, `task-logon.xml` and `task-crash.xml` are extracted to `{tmp}` to register the Scheduled Tasks.
 
 Total install footprint: ~12 MB plus the uninstaller.
 

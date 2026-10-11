@@ -151,7 +151,18 @@ WPF doesn't include a `NotifyIcon`. Three ways to get one:
 
 ## Single instance
 
-A named mutex `Pulse.SingleInstance` is created at startup (`ResourceMonitor.SingleInstance` before v1.1.0). If already taken, the second launch silently exits, so a build started while another Pulse is running doesn't start: close the other one first.
+A named mutex `Pulse.SingleInstance` is created at startup (`ResourceMonitor.SingleInstance` before v1.1.0). If already taken, the second launch silently exits, so a build started while another Pulse is running doesn't start: close the other one first. It exits without touching the mutex: until v1.2.0 `OnExit` released it anyway, and the second Pulse crashed on its way out (a crash the restart task below would have restarted forever).
+
+The exceptions are the restarts, whose previous process may still be on its way out: with `--riavvio` (after a display driver change, or *Riavvia come amministratore*, which before could see the old Pulse still running and quit) or `--dopo-crash` (from the restart task) the new Pulse waits up to 10 s for the mutex.
+
+## Staying up
+
+Two things closed Pulse for good before v1.3.0, and both now bring it back:
+
+- **A display driver change.** `Services/GpuWatch.cs` registers for display adapter arrival and removal with `CM_Register_Notification` (no window, nothing to do until it fires). On the first notice `HardwareMonitor.Pause()` stops every sensor read, also between two hardware items of a running update, because an NVML call with the old driver's handle crashes the process (a native access violation .NET can't catch: what happened on 10/10/2026, four seconds after an NVIDIA driver update). Five seconds after the last notice Pulse restarts itself: `App.RestartAfterGpuChange` saves the window, closes the tray icon and the metrics (the core sampling session too), releases the mutex and starts `Pulse.exe --riavvio`, which inherits the same token, so an elevated Pulse stays elevated. LibreHardwareMonitor is not closed: closing it would call into NVML too. A new process is also simpler and safer than reopening NVML inside the old one, which would keep the `nvml.dll` it loaded with the old driver.
+- **A crash.** The installer's `Pulse riavvio` task (see `docs/INSTALLER.md`) starts `Pulse.exe --dopo-crash` ten seconds after Windows logs the crash; `SettingsService.AllowCrashRestart` keeps the last restarts in `%APPDATA%\Pulse\riavvii-dopo-crash.txt` and refuses a fourth one within ten minutes.
+
+Both were checked on test builds with a simulated driver change and a deliberate crash: the restarted Pulse came back in 0.7 s and in 11 s, at the same place on screen; four crashes in a row gave three restarts and a refusal.
 
 ## Build configuration
 

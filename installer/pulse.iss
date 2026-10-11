@@ -8,6 +8,7 @@
 #define MyAppPublisher "Pulse Contributors"
 #define MyAppExeName "Pulse.exe"
 #define MyAppTaskName "Pulse"
+#define MyAppRestartTaskName "Pulse riavvio"
 
 [Setup]
 AppId={{A8D7E0B0-3F4C-4D6E-9A2B-1C3D5E6F7A8B}
@@ -40,16 +41,19 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [CustomMessages]
 italian.StartupTask=Avvia all'avvio di Windows (utente normale)
 italian.StartupAdminTask=Avvia con privilegi amministratore (per temp/watt CPU su sistemi supportati)
+italian.RestartTask=Riavvia Pulse se si chiude per un errore
 italian.DesktopIconTask=Crea collegamento sul desktop
 italian.OptionsGroup=Opzioni di installazione:
 english.StartupTask=Start with Windows (normal user)
 english.StartupAdminTask=Start with administrator privileges (for CPU temp/watt on supported systems)
+english.RestartTask=Restart Pulse if it closes because of an error
 english.DesktopIconTask=Create desktop shortcut
 english.OptionsGroup=Installation options:
 
 [Tasks]
 Name: "startup"; Description: "{cm:StartupTask}"; GroupDescription: "{cm:OptionsGroup}"; Flags: unchecked
 Name: "startup_admin"; Description: "{cm:StartupAdminTask}"; GroupDescription: "{cm:OptionsGroup}"; Flags: unchecked
+Name: "restart"; Description: "{cm:RestartTask}"; GroupDescription: "{cm:OptionsGroup}"
 Name: "desktopicon"; Description: "{cm:DesktopIconTask}"; GroupDescription: "{cm:OptionsGroup}"; Flags: unchecked
 
 [Files]
@@ -59,6 +63,10 @@ Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docs\HARDWARE-SUPPORT.md"; DestDir: "{app}\docs"; Flags: ignoreversion
+; Scheduled Task templates and the script that registers them: needed only during setup
+Source: "register-task.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall
+Source: "task-logon.xml"; DestDir: "{tmp}"; Flags: deleteafterinstall
+Source: "task-crash.xml"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -70,17 +78,26 @@ Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup AND NOT startup_admin
 
 [Run]
-; Create elevated Scheduled Task at logon if startup_admin selected
-Filename: "schtasks.exe"; \
-  Parameters: "/Create /TN ""{#MyAppTaskName}"" /TR ""\""{app}\{#MyAppExeName}\"""" /SC ONLOGON /RL HIGHEST /F"; \
+; Elevated Scheduled Task at logon if startup_admin selected (task-logon.xml: no 72-hour run limit, starts on battery too)
+Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Template ""{tmp}\task-logon.xml"" -Name ""{#MyAppTaskName}"" -Exe ""{app}\{#MyAppExeName}"" -RunLevel HighestAvailable"; \
   Tasks: startup_admin; Flags: runhidden waituntilterminated
+
+; Restart after a crash (task-crash.xml), with the rights Pulse normally starts with
+Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Template ""{tmp}\task-crash.xml"" -Name ""{#MyAppRestartTaskName}"" -Exe ""{app}\{#MyAppExeName}"" -RunLevel HighestAvailable"; \
+  Tasks: restart and startup_admin; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Template ""{tmp}\task-crash.xml"" -Name ""{#MyAppRestartTaskName}"" -Exe ""{app}\{#MyAppExeName}"" -RunLevel LeastPrivilege"; \
+  Tasks: restart and not startup_admin; Flags: runhidden waituntilterminated
 
 ; Launch the app at end of install
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-; Remove the Scheduled Task on uninstall (if it exists)
+; Remove the Scheduled Tasks on uninstall (if they exist)
 Filename: "schtasks.exe"; Parameters: "/Delete /TN ""{#MyAppTaskName}"" /F"; Flags: runhidden; RunOnceId: "DelPulseTask"
+Filename: "schtasks.exe"; Parameters: "/Delete /TN ""{#MyAppRestartTaskName}"" /F"; Flags: runhidden; RunOnceId: "DelPulseRestartTask"
 
 [Code]
 // Check if .NET 9 Desktop Runtime is installed

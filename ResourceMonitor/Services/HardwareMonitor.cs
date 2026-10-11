@@ -9,6 +9,7 @@ public sealed class HardwareMonitor : IDisposable
 {
     private Computer? _computer;
     private bool _enabled;
+    private volatile bool _paused;
     private readonly Task _initTask;
 
     public double? CpuTempC { get; private set; }
@@ -68,10 +69,14 @@ public sealed class HardwareMonitor : IDisposable
         }
     }
 
+    /// <summary>Smette di leggere i sensori, per sempre: il driver video è cambiato e una chiamata a NVML col driver vecchio manda
+    /// in crash il processo (10/10/2026). Pulse poi riparte da capo (App.RestartAfterGpuChange).</summary>
+    public void Pause() => _paused = true;
+
     public void Update()
     {
         try { _initTask.Wait(5000); } catch { }
-        if (!_enabled || _computer is null) return;
+        if (_paused || !_enabled || _computer is null) return;
         try
         {
             double? cpuTemp = null, cpuClock = null;
@@ -83,6 +88,7 @@ public sealed class HardwareMonitor : IDisposable
 
             foreach (var hw in _computer.Hardware)
             {
+                if (_paused) return;   // il driver video è cambiato a metà giro
                 hw.Update();
 
                 if (hw.HardwareType == HardwareType.Cpu)

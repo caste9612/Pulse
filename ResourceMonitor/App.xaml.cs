@@ -21,14 +21,44 @@ public partial class App : Application
     private Mutex? _singleInstance;
     private MenuItem? _pinItem;
     private MenuItem? _autoStartItem;
+    private GpuWatch? _gpuWatch;
+    private Timer? _gpuRestart;
+    private readonly object _gpuLock = new();
+    private bool _restarting;
+
+    // ripartenze: dopo un cambio del driver video o un "Riavvia come amministratore" (RestartArg), dal task "Pulse riavvio"
+    // dopo un crash (AfterCrashArg). In entrambi i casi si aspetta che il processo di prima liberi l'istanza unica
+    private const string RestartArg = "--riavvio";
+    private const string AfterCrashArg = "--dopo-crash";
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
+        bool afterCrash = Array.IndexOf(e.Args, AfterCrashArg) >= 0;
         _singleInstance = new Mutex(true, "Pulse.SingleInstance", out bool isNew);
+        if (!isNew && (afterCrash || Array.IndexOf(e.Args, RestartArg) >= 0))
+        {
+            // ripartenza (cambio del driver video, elevazione, crash): il processo di prima può essere ancora in uscita
+            try { isNew = _singleInstance.WaitOne(TimeSpan.FromSeconds(10)); }
+            catch (AbandonedMutexException) { isNew = true; }
+        }
         if (!isNew)
         {
+            // c'è già un Pulse: si esce senza toccare l'istanza unica, che non è nostra. Prima OnExit la rilasciava lo stesso e il
+            // secondo Pulse andava in crash all'uscita, un crash che il task "Pulse riavvio" avrebbe fatto ripartire all'infinito
+            _singleInstance.Dispose();
+            _singleInstance = null;
+            Shutdown();
+            return;
+        }
+        if (afterCrash && !SettingsService.AllowCrashRestart())
+        {
+            // tre ripartenze dopo un crash in dieci minuti: Pulse va in crash appena parte, meglio fermarsi
+            PerfLog.Note("crash restart refused: already 3 in the last 10 minutes");
+            _singleInstance.ReleaseMutex();
+            _singleInstance.Dispose();
+            _singleInstance = null;
             Shutdown();
             return;
         }
@@ -42,6 +72,8 @@ public partial class App : Application
         _proc = new ProcessMonitor();
         _net = new NetworkMonitor();
         _drive = new DriveMonitor();
+        _gpuWatch = new GpuWatch();
+        _gpuWatch.Changed += OnGpuChanged;
         _metrics.Start();
 
         _window = new MainWindow(_metrics, _hw, _proc, _net, _drive, _settings);
@@ -164,9 +196,11 @@ public partial class App : Application
         {
             var exe = Environment.ProcessPath;
             if (string.IsNullOrEmpty(exe)) return;
+            // RestartArg: il processo elevato aspetta che questo liberi l'istanza unica, invece di uscire subito
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = exe,
+                Arguments = RestartArg,
                 UseShellExecute = true,
                 Verb = "runas"
             };
@@ -178,10 +212,44 @@ public partial class App : Application
 
     private void ExitApp()
     {
+        _gpuWatch?.Dispose();
         _tray?.Dispose();
         _metrics?.Dispose();
         _hw?.Dispose();
         if (_window != null) _window.Close();
+        Shutdown();
+    }
+
+    // un adattatore video è sparito o comparso: da subito niente più letture dei sensori, poi, cinque secondi dopo l'ultimo
+    // avviso (un aggiornamento del driver ne manda più d'uno), Pulse riparte da capo
+    private void OnGpuChanged()
+    {
+        _hw?.Pause();
+        lock (_gpuLock)
+        {
+            _gpuRestart ??= new Timer(_ => Dispatcher.InvokeAsync(RestartAfterGpuChange));
+            _gpuRestart.Change(TimeSpan.FromSeconds(5), Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    // NVML resta legato al driver con cui si è aperto: dopo un cambio non lo si riapre nello stesso processo, si riparte. Il
+    // processo nuovo eredita i diritti di questo (elevato resta elevato) e la finestra torna dov'era (le impostazioni sono salvate
+    // alla chiusura). LibreHardwareMonitor non si chiude: toccherebbe NVML del driver vecchio, lo chiude l'uscita del processo
+    private void RestartAfterGpuChange()
+    {
+        var exe = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(exe) || _restarting) return;
+        _restarting = true;   // un avviso arrivato durante la ripartenza non ne fa partire un'altra
+        PerfLog.Note("display adapter changed: restarting");
+        _gpuWatch?.Dispose();
+        _tray?.Dispose();
+        _metrics?.Dispose();
+        _window?.Close();
+        _singleInstance?.ReleaseMutex();
+        _singleInstance?.Dispose();
+        _singleInstance = null;
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, RestartArg) { UseShellExecute = false }); }
+        catch (Exception ex) { PerfLog.Note($"restart failed: {ex.Message}"); }
         Shutdown();
     }
 
