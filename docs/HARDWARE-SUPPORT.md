@@ -13,9 +13,9 @@ Which sensors work on which hardware, and why some need extra software.
 | CPU temperature | LibreHardwareMonitorLib via MSR | **signed kernel driver + admin** |
 | CPU package power | LibreHardwareMonitorLib via MSR | **signed kernel driver + admin** |
 | RAM (all metrics) | `GlobalMemoryStatusEx` + `GetPerformanceInfo` (committed memory); `NtQuerySystemInformation` for the memory lists (in use, modified, standby, free) and the page file usage | nothing |
-| GPU usage / temp / clock / VRAM (NVIDIA) | LibreHardwareMonitorLib via NVAPI | NVIDIA driver (anyone has it) |
-| GPU usage / temp / clock / VRAM (AMD) | LibreHardwareMonitorLib via ADL | AMD driver (anyone has it) |
-| GPU power (W) | LibreHardwareMonitorLib | NVIDIA/AMD driver |
+| GPU usage / temp / clock / VRAM / power (NVIDIA) | NVML (`nvml.dll` of the NVIDIA driver), read directly by Pulse; LibreHardwareMonitorLib as the fallback | NVIDIA driver (anyone has it) |
+| GPU usage / temp / clock / VRAM (AMD, Intel) | LibreHardwareMonitorLib (via ADL for AMD) | AMD or Intel driver (anyone has it) |
+| GPU power (W), AMD and Intel | LibreHardwareMonitorLib | AMD/Intel driver |
 | Disk I/O total | `NtQuerySystemInformation` (system-wide I/O byte counters) | nothing |
 | Disk per-drive free space | `DriveInfo.GetDrives` | nothing |
 | SSD temperature | LibreHardwareMonitorLib via SMART | **off by default**, see [Storage](#storage-ssd-temperature) |

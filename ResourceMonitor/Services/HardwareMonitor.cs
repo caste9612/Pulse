@@ -12,6 +12,16 @@ public sealed class HardwareMonitor : IDisposable
     private volatile bool _paused;
     private readonly Task _initTask;
 
+    // la scheda NVIDIA letta con NVML (NvidiaGpu): la prima lettura completa di LibreHardwareMonitor sceglie la scheda da mostrare
+    // come sempre (la memoria video più grande); se è una NVIDIA che NVML vede, da lì in poi le GPU le legge NVML. A ogni errore
+    // si torna a LibreHardwareMonitor. PULSE_NO_NVML=1 la spegne
+    private NvidiaGpu? _nvidia;
+    private bool _nvidiaActive;
+    private bool _gpuChosen;
+    // senza NVML, dopo la prima lettura LibreHardwareMonitor aggiorna solo la scheda mostrata: le altre (la GPU integrata accanto a
+    // una dedicata) costavano tempo e mettevano nel consumo totale watt che sono già nel pacchetto della CPU. Null = tutte
+    private IHardware? _chosenGpu;
+
     public double? CpuTempC { get; private set; }
     public double? CpuClockMhz { get; private set; }
     public double? CpuPowerW { get; private set; }
@@ -58,6 +68,7 @@ public sealed class HardwareMonitor : IDisposable
             };
             _computer.Open();
             _enabled = true;
+            if (Environment.GetEnvironmentVariable("PULSE_NO_NVML") != "1") _nvidia = NvidiaGpu.TryOpen();
             CpuName = _computer.Hardware.FirstOrDefault(h => h.HardwareType == HardwareType.Cpu)?.Name;
             GpuName = _computer.Hardware.FirstOrDefault(h =>
                 h.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel)?.Name;
@@ -85,10 +96,15 @@ public sealed class HardwareMonitor : IDisposable
             double? bestGpuMemTotal = null, bestGpuMemUsed = null;
             double totalGpuPower = 0;
             int gpuPowerCount = 0;
+            IHardware? bestGpu = null;
+            bool nvml = _nvidiaActive;
 
             foreach (var hw in _computer.Hardware)
             {
                 if (_paused) return;   // il driver video è cambiato a metà giro
+                bool gpu = hw.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel;
+                if (gpu && (nvml || (_chosenGpu is not null && hw != _chosenGpu)))
+                    continue;          // la scheda mostrata la legge NVML (sotto), le altre non si leggono più
                 hw.Update();
 
                 if (hw.HardwareType == HardwareType.Cpu)
@@ -191,6 +207,7 @@ public sealed class HardwareMonitor : IDisposable
 
                     if (plausibleTotal && (bestGpuMemTotal is null || gpuMemTotal > bestGpuMemTotal))
                     {
+                        bestGpu = hw;
                         bestGpuMemTotal = gpuMemTotal;
                         bestGpuMemUsed = gpuMemUsed;
                         gpuTemp = localTemp ?? gpuTemp;
@@ -222,6 +239,39 @@ public sealed class HardwareMonitor : IDisposable
                 }
             }
 
+            if (nvml)
+            {
+                if (_nvidia!.TryRead(out var r))
+                {
+                    gpuTemp = r.TempC;
+                    gpuClock = r.CoreClockMhz;
+                    gpuMemClock = r.MemoryClockMhz;
+                    gpuPower = r.PowerW;
+                    bestGpuMemTotal = r.MemoryTotalMb;
+                    bestGpuMemUsed = r.MemoryUsedMb;
+                    GpuLoadPercent = r.LoadPercent;
+                    if (r.TotalPowerW is double watts) { totalGpuPower = watts; gpuPowerCount = 1; }
+                }
+                else
+                {
+                    // NVML non risponde più: da qui LibreHardwareMonitor, come prima; questo giro tiene i valori di prima
+                    PerfLog.Note("nvml read failed: back to LibreHardwareMonitor");
+                    _nvidiaActive = false;
+                    _nvidia.Dispose();
+                    _nvidia = null;
+                    return;
+                }
+            }
+            else if (!_gpuChosen)
+            {
+                // la prima lettura completa ha scelto la scheda da mostrare: se è una NVIDIA e NVML c'è, da qui la legge NVML;
+                // altrimenti LibreHardwareMonitor legge solo quella (se nessuna ha una memoria plausibile, tutte come prima)
+                _gpuChosen = true;
+                _chosenGpu = bestGpu;
+                if (_nvidia is not null && bestGpu?.HardwareType == HardwareType.GpuNvidia) _nvidiaActive = true;
+                else { _nvidia?.Dispose(); _nvidia = null; }
+            }
+
             // CPU temp da WMI Thermal Zone è motherboard/chipset, NON la CPU.
             // Mostriamo solo se davvero da LHM (MSR), altrimenti n/a.
             if (cpuTemp is not null && cpuTemp < 5) cpuTemp = null;
@@ -247,6 +297,7 @@ public sealed class HardwareMonitor : IDisposable
 
     public void Dispose()
     {
+        _nvidia?.Dispose();
         try { _computer?.Close(); } catch { }
     }
 }

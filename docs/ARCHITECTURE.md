@@ -59,12 +59,19 @@ Different metrics update at different rates to balance freshness vs CPU cost:
 | Service | Interval | Cost per tick | Why |
 |---|---|---|---|
 | MetricsService | 1 s | ~5 ms | Direct Win32 calls through `NativeMetrics`; runs on the UI thread (`DispatcherTimer`) |
-| HardwareMonitor (LHM) | 2 s | 10-50 ms | Polling all sensors; runs in background thread |
+| HardwareMonitor (LHM, NVML) | 2 s | ~5 ms with an NVIDIA GPU, ~80 ms through LHM alone | CPU sensors through LHM, the shown GPU through NVML when it's an NVIDIA (see below); background thread |
 | ProcessMonitor | 5 s | 50-200 ms | Process.GetProcesses is expensive; background thread |
 | NetworkMonitor | 2 s | <5 ms (ping) | Async ping to 8.8.8.8; adapter scan and `netsh` (every 8 s) on a background thread; public IP every 10 min |
 | DriveMonitor | 30 s | <5 ms | DriveInfo is fast; can stall on sleeping HDDs (background) |
 
 The 1 s tick is cheap enough to run on the UI thread. All slower work happens on `Task.Run` background threads, and the UI thread only does the final text/sparkline updates.
+
+**GPU sensors.** LibreHardwareMonitor reads every sensor of every GPU: on the reference RTX 5070 Ti that is 41 sensors, about twenty D3D engines and the PCIe traffic among them (which the driver samples with a wait), 73 ms and 15 ms of CPU every two seconds, for the six values the widget shows. So the first full read still goes through LHM and chooses the GPU to show as before (the largest plausible VRAM). From then on:
+
+- if it is an NVIDIA GPU that `Services/NvidiaGpu.cs` can see through NVML (the NVIDIA driver's own library, `nvml.dll` loaded only from System32 or the driver's NVSMI folder, never from the app folder), those six values come from NVML, about 1 ms, and LHM no longer reads any GPU. Any missing piece (no NVIDIA driver, an NVML without the `_v2` functions, no device answering load and memory) leaves LHM in charge; a failed read at run time hands the GPU back to LHM; `PULSE_NO_NVML=1` keeps LHM;
+- otherwise LHM keeps reading, but only the chosen GPU: the others (an integrated GPU next to a discrete one) cost time, and the integrated GPU's power sensor (53 W at idle on the reference 7950X, overlapping the CPU package power) inflated the PC power estimate by about 50 W.
+
+Measured with Pulse's own `HardwareMonitor` on the reference PC, not elevated: a sensor read went from 84 ms (22 ms of CPU) to 4.8 ms (1 ms of CPU), with the same values.
 
 Performance log: ticks that exceed thresholds (50 ms metrics tick, 200 ms hardware/network/process ticks, 500 ms whole slow tick) get logged to `%TEMP%\pulse-perf.log` for debugging UI freezes. The same file gets a line when the core sampling of an elevated Pulse can't start or delivers no samples (see "Which process runs on which core").
 
