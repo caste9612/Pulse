@@ -143,7 +143,7 @@ Right-click the tray icon (near the clock) for:
 
 - Show / Hide — toggle widget visibility
 - Theme — Dark / Light / Follow Windows
-- Appearance... — accent colour, transparency, fill and density, applied live (the window comes from Reticle and is still in Italian)
+- Appearance... — accent colour, transparency, fill and density, applied live
 - Always on top — pin toggle
 - Start with Windows — autostart (regular user privileges)
 - Restart as administrator — re-launch elevated, enables MSR sensors and the process colours in the core bars (only shown when not already admin)

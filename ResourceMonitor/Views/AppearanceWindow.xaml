@@ -5,8 +5,9 @@
         Title="Appearance · Pulse"
         Width="760" Height="680" MinWidth="560" MinHeight="420"
         WindowStartupLocation="CenterScreen">
-    <!-- la pagina Aspetto della libreria: accento, tema, trasparenza, riempimento e densità cambiano dal vivo anche il widget -->
+    <!-- la pagina Aspetto della libreria, in inglese come il resto dell'app (Reticle 0.6.1, I3): accento, tema, trasparenza,
+         riempimento e densità cambiano dal vivo anche il widget -->
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <rt:AppearanceSettingsView />
+        <rt:AppearanceSettingsView TextLanguage="English" />
     </ScrollViewer>
 </rt:ReticleWindow>
