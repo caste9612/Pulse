@@ -1,0 +1,33 @@
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <!-- Pulse all'accesso, con i diritti di amministratore. Registrato da register-task.ps1, che mette nei segnaposto l'utente
+       che installa e l'exe (i loro nomi non vanno nei commenti: anche lì verrebbero sostituiti). Rispetto al task creato prima
+       con schtasks: nessun limite di durata (il valore predefinito, 72 ore, chiudeva Pulse dopo tre giorni accesi) e avvio
+       anche a batteria -->
+  <RegistrationInfo>
+    <Description>Starts Pulse at logon with administrator rights (CPU temperature and power, process colours in the core bars).</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>PULSE_USER</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>PULSE_USER</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>PULSE_RUNLEVEL</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>PULSE_EXE</Command>
+    </Exec>
+  </Actions>
+</Task>

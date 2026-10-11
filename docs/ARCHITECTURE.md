@@ -13,7 +13,9 @@ How Pulse is structured under the hood.
                          │  │  (custom render) │      arrays   │
                          │  └──────────────────┘               │
                          │  ┌──────────────────┐               │
-                         │  │  TextBlocks x12  │  ◄── strings  │
+                         │  │  TextBlocks +    │  ◄── strings  │
+                         │  │  lists (drives,  │               │
+                         │  │  top processes)  │               │
                          │  └──────────────────┘               │
                          └────────────▲────────────────────────┘
                                       │ Dispatcher.BeginInvoke
@@ -24,7 +26,7 @@ How Pulse is structured under the hood.
 │  ┌──────────────────┐  ┌────────────┴─────────┐                    │
 │  │ AppSettings JSON │  │ MetricsService       │ ◄── fires every 1s │
 │  │ %APPDATA%\Pulse  │  │ (CPU%, RAM, Disk,    │     on dispatcher  │
-│  │ \settings.json   │  │  Net via PerfCounter)│                    │
+│  │ \settings.json   │  │  Net via Win32)      │                    │
 │  └──────────────────┘  └──────────────────────┘                    │
 │                                                                    │
 │  ┌──────────────────┐  ┌──────────────────────┐                    │
@@ -45,7 +47,7 @@ How Pulse is structured under the hood.
 │  └──────────────────┘  └──────────────────────┘                    │
 │                                                                    │
 │  ┌──────────────────────────────────────────────────────┐          │
-│  │ NotifyIcon (WinForms) — tray icon + context menu     │          │
+│  │ TrayIcon (Win32 Shell_NotifyIconW) + WPF ContextMenu │          │
 │  └──────────────────────────────────────────────────────┘          │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -56,39 +58,67 @@ Different metrics update at different rates to balance freshness vs CPU cost:
 
 | Service | Interval | Cost per tick | Why |
 |---|---|---|---|
-| MetricsService | 1 s | <10 ms | PerfCounter reads are cheap when filtered |
-| HardwareMonitor (LHM) | 2 s | 10-50 ms | Polling all sensors; runs in background thread |
+| MetricsService | 1 s | ~5 ms | Direct Win32 calls through `NativeMetrics`; runs on the UI thread (`DispatcherTimer`) |
+| HardwareMonitor (LHM, NVML) | 2 s | ~5 ms with an NVIDIA GPU, ~80 ms through LHM alone | CPU sensors through LHM, the shown GPU through NVML when it's an NVIDIA (see below); background thread |
 | ProcessMonitor | 5 s | 50-200 ms | Process.GetProcesses is expensive; background thread |
-| NetworkMonitor | 2 s | <5 ms (ping) | Async ping; netsh subprocess every 8s on background |
+| NetworkMonitor | 2 s | <5 ms (ping) | Async ping to 8.8.8.8; adapter scan on a background thread, `netsh wlan` only when the active connection is Wi-Fi (every 30 s: until v1.2.0 every 8 s even on a cable, 31 ms of CPU each); public IP every 10 min |
 | DriveMonitor | 30 s | <5 ms | DriveInfo is fast; can stall on sleeping HDDs (background) |
 
-All slow work happens on `Task.Run` background threads. The UI thread only does the final text/sparkline updates via `Dispatcher.BeginInvoke`.
+The 1 s tick is cheap enough to run on the UI thread. All slower work happens on `Task.Run` background threads, and the UI thread only does the final text/sparkline updates.
 
-Performance log: ticks that exceed thresholds (100 ms metrics, 200 ms proc, 500 ms slow total) get logged to `%TEMP%\pulse-perf.log` for debugging UI freezes.
+**GPU sensors.** LibreHardwareMonitor reads every sensor of every GPU: on the reference RTX 5070 Ti that is 41 sensors, about twenty D3D engines and the PCIe traffic among them (which the driver samples with a wait), 73 ms and 15 ms of CPU every two seconds, for the six values the widget shows. So the first full read still goes through LHM and chooses the GPU to show as before (the largest plausible VRAM). From then on:
+
+- if it is an NVIDIA GPU that `Services/NvidiaGpu.cs` can see through NVML (the NVIDIA driver's own library, `nvml.dll` loaded only from System32 or the driver's NVSMI folder, never from the app folder), those six values come from NVML, about 1 ms, and LHM no longer reads any GPU. Any missing piece (no NVIDIA driver, an NVML without the `_v2` functions, no device answering load and memory) leaves LHM in charge; a failed read at run time hands the GPU back to LHM; `PULSE_NO_NVML=1` keeps LHM;
+- otherwise LHM keeps reading, but only the chosen GPU: the others (an integrated GPU next to a discrete one) cost time, and the integrated GPU's power sensor (53 W at idle on the reference 7950X, overlapping the CPU package power) inflated the PC power estimate by about 50 W.
+
+Measured with Pulse's own `HardwareMonitor` on the reference PC, not elevated: a sensor read went from 84 ms (22 ms of CPU) to 4.8 ms (1 ms of CPU), with the same values.
+
+Performance log: ticks that exceed thresholds (50 ms metrics tick, 200 ms hardware/network/process ticks, 500 ms whole slow tick) get logged to `%TEMP%\pulse-perf.log` for debugging UI freezes. The same file gets a line when the core sampling of an elevated Pulse can't start or delivers no samples (see "Which process runs on which core").
 
 ## Data flow
 
-1. **MetricsService timer fires** → reads `Processor Information % Utility`, memory counters, disk Read/Write Bytes/sec, network Bytes/sec sums.
+1. **MetricsService timer fires** (1 s, UI thread) → `NativeMetrics` reads the CPU times (`GetSystemTimes`), the times of every logical processor (`NtQuerySystemInformation`, `SystemProcessorPerformanceInformation`), memory (`GlobalMemoryStatusEx`, `GetPerformanceInfo` for the committed memory, `NtQuerySystemInformation` for the memory lists, `SystemMemoryListInformation`, and the page files, `SystemPageFileInformation`), the system-wide I/O byte counters (`NtQuerySystemInformation`, `SystemPerformanceInformation`), the network interface table (`GetIfTable2`) and the CPU clock (`CallNtPowerInformation`). CPU %, the per-core loads and the disk/network rates come from the delta with the previous sample. Which logical processors share a physical core is read once, at startup (`GetLogicalProcessorInformationEx`). With Pulse elevated, `CoreSampler` adds which processes ran on each core (see below).
 2. Raises `Updated` event.
-3. `MainWindow.OnMetricsUpdated` updates TextBlocks and assigns new `double[]` arrays to Sparkline.Values (triggers `OnRender`).
-4. **Slow tick fires** (separate timer) → background `Task.Run(_hw.Update())` (LHM), `_net.UpdateAsync()`, then marshals back to UI thread to update temp/clock/watt/IP labels.
+3. `MainWindow.OnMetricsUpdated` updates TextBlocks, assigns a fresh `ToArray()` of each 60-value history to `Sparkline.Values` and the fresh per-core array to `CoreBars.Values` (both trigger `OnRender`).
+4. **Slow tick fires** (2 s, separate timer) → background `Task.Run(_hw.Update)` (LHM), then `_net.UpdateAsync()`, then back on the UI thread to update temp/clock/watt/IP labels.
 5. `MetricsService.GpuExternal` and `VramUsedExternalGb` are set from `HardwareMonitor` outputs so the GPU sparkline still updates on the 1s tick.
+6. **Process tick** (5 s) and **drive tick** (30 s) scan on `Task.Run`, then replace the items of the *Top CPU* / *Top RAM* panels and of the drive list.
 
 ## Sparkline rendering
 
 `Controls/Sparkline.cs` is a `FrameworkElement` (not UserControl) that overrides `OnRender(DrawingContext)`. It:
 
-- Reads `Values` (an enumerable of 60 doubles)
-- Normalizes to `MaxValue` (or auto-scales if `AutoScale=true`)
-- Builds a `StreamGeometry` for the fill (closed area to baseline)
-- Builds a second `StreamGeometry` for the stroke line
-- Draws fill (semi-transparent) + stroke (full opacity)
+- Reads `Values` (an enumerable of 60 doubles) into a `Point[]` buffer reused between renders
+- Normalizes to `MaxValue` (100 for CPU, RAM and GPU) or auto-scales to the highest value (`AutoScale="True"` for NET and DSK)
+- Smooths the line: a cardinal spline (tension 0.5) written as cubic Bezier segments
+- Builds a `StreamGeometry` for the fill (closed area to baseline) and a second one for the stroke line
+- Draws the fill (vertical gradient from `FillOpacity` to transparent), the stroke and a dot with a halo on the last value (`ShowEndDot`)
 
-`Values` is registered with `FrameworkPropertyMetadataOptions.AffectsRender`, so any assignment re-triggers render. The MainWindow assigns a fresh `_metrics.CpuHistory.ToArray()` each tick.
+The gradient and halo brushes are cached and rebuilt only when the colour changes. The dotted grid under the curve is not drawn here: it is the `Reticle.Brush.Dots` background of the hosting border (`SparkBed` in `MainWindow.xaml`).
+
+`Values` is registered with `FrameworkPropertyMetadataOptions.AffectsRender`, so any assignment re-triggers render. The MainWindow assigns a fresh `ToArray()` of each history every tick.
+
+`Controls/CoreBars.cs`, under the CPU sparkline, works the same way: one bar per logical processor from the latest sample (no history, no animation), the threads of one physical core side by side, a track in the series colour at 10 % and the fill from the bottom. Gaps and edges are rounded to device pixels, so the narrow bars stay sharp at any scale.
+
+`Controls/MemoryBar.cs`, under the RAM sparkline, is the composition bar of Task Manager drawn the same way: in use, modified, standby (shown as "in cache") and free from the left, in the RAM colour at 100 %, 60 %, 30 % and 10 % (the free part is the track), with a 1 px gap between parts. "In use" is what the memory lists leave: total minus free, modified and standby.
+
+## Which process runs on which core
+
+Windows keeps no cheap answer to "which process is on which core": the scheduler moves threads between cores all the time. `Services/CoreSampler.cs` asks the kernel for samples instead, the way profilers do:
+
+- It opens a real-time ETW session in system-logger mode (`EVENT_TRACE_SYSTEM_LOGGER_MODE`, so it doesn't take the single *NT Kernel Logger*), named `Pulse core sampling`, with the `PROFILE` and `THREAD` flags, only while there is a process to colour: `MainWindow` asks for it at each process tick (`MetricsService.SetCoreSampling`), and the session opens and closes off the UI thread. With the PC idle there is none, so nothing is sampled. Only an elevated Pulse can open it; otherwise the core tooltip says that the colours need the administrator.
+- The profiling interval is global: Pulse sets it to 10 ms (100 samples per second per logical processor, instead of Windows' default 1 ms) and puts the previous value back when the session closes, unless someone else changed it meanwhile. If it can't set it, it closes the session rather than run at ten times the samples.
+- A background thread runs `ProcessTrace`. Each `SampledProfile` event says which thread was running on which processor; the thread events (`DCStart` for the threads alive at startup, then `Start` and `End`) map threads to processes, and a thread seen nowhere is looked up once with `OpenThread` + `GetProcessIdOfThread`.
+- The samples are counted per core in four columns: the three tracked processes and everything else; idle samples don't count. Every second `MetricsService` takes the shares of the last two seconds, and `CoreBars` draws them as layers inside each bar, whose height still comes from the per-core times of `NtQuerySystemInformation`.
+- `MainWindow` chooses the tracked processes at each process tick: the processes of *Top CPU* that use at least half a core, up to three. A process keeps its colour until it drops below a quarter of a core, so one hovering around the threshold doesn't blink.
+- The session is stopped when the last tracked process goes and on exit (`ExitApp`, with `ProcessExit` as a fallback). If Pulse is killed while sampling the session stays open without a consumer; an elevated Pulse closes it at its next start.
+- `PULSE_NO_CORE_SAMPLING=1` turns it off, like `PULSE_NO_LHM` and `PULSE_NO_PROC`.
+
+Cost of an open session, measured on the Ryzen 9 7950X reference with the PC idle, an elevated build and the sampling on and off alternated in two 40 s rounds: Pulse's own CPU 3.30% of one core with it, 3.34% without (no measurable difference), private memory +1 MB. The kernel side (about 3,200 samples per second on 32 logical processors) didn't show in the system-wide busy time, whose noise on an idle PC was larger (1.5–2.9% in both cases).
 
 ## State persistence
 
-Single JSON file at `%APPDATA%\ResourceMonitor\settings.json`:
+Window state lives in a single JSON file at `%APPDATA%\Pulse\settings.json` (on first launch it is copied from `%APPDATA%\ResourceMonitor\settings.json`, the pre-v1.1.0 location, if only that one exists):
 
 ```json
 {
@@ -101,50 +131,86 @@ Single JSON file at `%APPDATA%\ResourceMonitor\settings.json`:
 }
 ```
 
-Saved on `LocationChanged`, `SizeChanged`, on close, and on toggle of tray menu options.
+Saved on `LocationChanged`, `SizeChanged`, on close, when the widget is hidden or shown, and on toggle of tray menu options.
+
+The appearance (theme, accent, transparency, fill, density) is saved by Reticle in `%LOCALAPPDATA%\Pulse\reticle-theme.json` (see below). *Start with Windows* writes the `Pulse` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 ## UI: Reticle
 
-From v1.2.0 the widget is built on Reticle, the author's WPF design system (v0.5.0, as the two DLLs in `lib/Reticle`, updated with `scripts/update-reticle.ps1`):
+From v1.2.0 the widget is built on Reticle, the author's WPF design system (v0.6.1, as the two DLLs in `lib/Reticle`, updated with `scripts/update-reticle.ps1`):
 
-- `App.xaml` merges `ReticleTheme` (the app defaults: dark, green accent, Mica, compact) and `ReticleControls`; `App.OnStartup` loads the user's choices with `ThemeManager.Initialize(new JsonThemeSettingsStore("Pulse"))`, i.e. `%LOCALAPPDATA%\Pulse\reticle-theme.json`.
-- `MainWindow` is a `ReticleWindow` without caption bar (`ShowCaption="False"`) that hosts a `TickBorder` frame: the widget pattern of Reticle. No `AllowsTransparency`, no `DropShadowEffect`: the transparency is the Windows 11 backdrop (Mica by default, Acrylic or opaque from *Aspetto...*), composed by DWM instead of copied back from the GPU on every update.
-- The tray menu switches the theme (*Tema*); *Aspetto...* opens Reticle's `AppearanceSettingsView`. Every change is applied live and saved.
+- `App.xaml` merges `ReticleTheme` (the app defaults: dark, green accent, Mica, compact) and `ReticleControls`; `App.OnStartup` loads the user's choices with `ThemeManager.Current.Initialize(new JsonThemeSettingsStore("Pulse"))`, i.e. `%LOCALAPPDATA%\Pulse\reticle-theme.json`.
+- `MainWindow` is a `ReticleWindow` without caption bar (`ShowCaption="False"`) that hosts a `TickBorder` frame: the widget pattern of Reticle. No `AllowsTransparency`, no `DropShadowEffect`: the transparency is the Windows 11 backdrop (Mica by default, Acrylic or opaque from *Appearance...*), composed by DWM instead of copied back from the GPU on every update.
+- Since Reticle 0.6.0 there is no WPF `WindowChrome` either: `ReticleWindow` answers `WM_NCCALCSIZE` (the whole window is client area) and `WM_NCHITTEST` (6-unit resize borders) itself. With `ShowCaption="False"` its drag area is 0 high, so dragging the header and double-clicking it stay Pulse's own handlers.
+- The tray menu switches the theme (*Theme*); *Appearance...* opens Reticle's `AppearanceSettingsView` with `TextLanguage="English"` (Reticle 0.6.1; the library default is Italian). Every change is applied live and saved.
 - Series colours: CPU, GPU, NET and DSK use the theme tones (info, success, warning, danger); RAM violet and temperature amber are fixed categories, with darker shades on the light theme (`MainWindow.UpdateSeriesBrushes`).
-- Reticle's animations and timers run only while the widget is on screen, so a widget hidden in the tray costs nothing on the UI side.
+- Reticle's animations and timers run only while the widget is on screen. Pulse's own polling keeps running while the widget is hidden in the tray, so the values are current when it comes back: hidden costs less CPU than visible, not zero (see the v1.2.0 figures in the README).
 
-## Why WPF + WinForms tray icon
+## Tray icon without WinForms
 
-WPF doesn't include a `NotifyIcon`. Two ways to get one:
+WPF doesn't include a `NotifyIcon`. Three ways to get one:
 
 1. Third-party NuGet (e.g., `H.NotifyIcon.Wpf`) — adds dependency
-2. Enable WinForms in the WPF project (`<UseWindowsForms>true</UseWindowsForms>`) and use `System.Windows.Forms.NotifyIcon`
+2. Enable WinForms in the WPF project (`<UseWindowsForms>true</UseWindowsForms>`) and use `System.Windows.Forms.NotifyIcon` — what Pulse did before v1.0.0; loading the WinForms assemblies cost 20-30 MB of RAM
+3. Call the Windows shell directly — what Pulse does
 
-We use option 2. It costs ~20-30 MB of RAM (WinForms assemblies loaded) and **blocks `PublishTrimmed`** (WinForms isn't trim-safe). Trade-off accepted for fewer external deps.
+`Services/TrayIcon.cs` registers the icon with `Shell_NotifyIconW` (`NOTIFYICON_VERSION_4`) and gets its messages through a message-only window (an `HwndSource` parented to `HWND_MESSAGE`). The icon is the exe's own, loaded with `ExtractIconEx`. Left click shows or hides the widget, double click brings it back, right click opens a WPF `ContextMenu` at the mouse position: `App.PopulateMenu` rebuilds it at every opening, and it takes its style from the Reticle theme.
 
 ## Single instance
 
-A named mutex `ResourceMonitor.SingleInstance` is created at startup. If already taken, the second launch silently exits.
+A named mutex `Pulse.SingleInstance` is created at startup (`ResourceMonitor.SingleInstance` before v1.1.0). If already taken, the second launch silently exits, so a build started while another Pulse is running doesn't start: close the other one first. It exits without touching the mutex: until v1.2.0 `OnExit` released it anyway, and the second Pulse crashed on its way out (a crash the restart task below would have restarted forever). If Windows denies a Pulse without the rights access to the mutex of an elevated one, that too means a Pulse is running.
+
+The exceptions are the restarts, whose previous process may still be on its way out: with `--restart` (after a display driver change, or *Restart as administrator*, which before could see the old Pulse still running and quit) or `--after-crash` (from the restart task) the new Pulse waits up to 10 s for the mutex.
+
+## Starting elevated
+
+With *Start with administrator privileges* the installer registers the `Pulse` logon task with the highest privileges (`docs/INSTALLER.md`): Windows starts it elevated at logon, without a UAC prompt. Every other start is a normal user's: *Launch Pulse* at the end of the installer (Inno Setup runs it as the user who started the setup, unelevated even from an elevated setup), the Start menu, the desktop icon. Until v1.3.0 Pulse then ran without the rights until the next logon.
+
+`Services/AdminStart.cs` closes that gap. A Pulse started with no arguments, by an administrator whose token is the UAC-limited one, reads the task through the Task Scheduler COM API (`Schedule.Service`). If the task is enabled, runs with the highest privileges, belongs to the same user and starts this very `Pulse.exe`, Pulse releases the single-instance mutex, runs the task, waits up to 10 s for the elevated Pulse to take the mutex and exits. In every other case it carries on unelevated, as before:
+
+- no task, a disabled one, or one that starts another exe (a portable copy, a test build);
+- a standard user or UAC turned off, where the task would start an unelevated Pulse anyway;
+- any COM error;
+- no elevated Pulse within 10 s: the first one takes the mutex back.
+
+`SettingsService.AllowAdminHandOff` allows one hand-off a minute (`%APPDATA%\Pulse\admin-start.txt`), so a task that started an unelevated Pulse could not bounce forever. Restarts (`--restart`, `--after-crash`) and `--appearance` never hand off: they already have their rights, and a task can't pass arguments. `PULSE_NO_ADMIN_START=1` turns it off. A hand-off, a task that exists but is not used, or one that brings no elevated Pulse leaves a line in `%TEMP%\pulse-perf.log`.
+
+## Staying up
+
+Two things closed Pulse for good before v1.3.0, and both now bring it back:
+
+- **A display driver change.** `Services/GpuWatch.cs` registers for display adapter arrival and removal with `CM_Register_Notification` (no window, nothing to do until it fires). On the first notice `HardwareMonitor.Pause()` stops every sensor read, also between two hardware items of a running update, because an NVML call with the old driver's handle crashes the process (a native access violation .NET can't catch: what happened on 10/10/2026, four seconds after an NVIDIA driver update). Five seconds after the last notice Pulse restarts itself: `App.RestartAfterGpuChange` saves the window, closes the tray icon and the metrics (the core sampling session too), releases the mutex and starts `Pulse.exe --restart`, which inherits the same token, so an elevated Pulse stays elevated. LibreHardwareMonitor is not closed: closing it would call into NVML too. A new process is also simpler and safer than reopening NVML inside the old one, which would keep the `nvml.dll` it loaded with the old driver.
+- **A crash.** The installer's `Pulse restart` task (see `docs/INSTALLER.md`) starts `Pulse.exe --after-crash` ten seconds after Windows logs the crash; `SettingsService.AllowCrashRestart` keeps the last restarts in `%APPDATA%\Pulse\crash-restarts.txt` and refuses a fourth one within ten minutes.
+
+Both were checked on test builds with a simulated driver change and a deliberate crash: the restarted Pulse came back in 0.7 s and in 11 s, at the same place on screen; four crashes in a row gave three restarts and a refusal.
 
 ## Build configuration
 
 `ResourceMonitor.csproj` key flags:
 
-- `<TargetFramework>net9.0-windows</TargetFramework>` — WPF on .NET 9
-- `<UseWPF>true</UseWPF>`, `<UseWindowsForms>true</UseWindowsForms>`
+- `<TargetFramework>net9.0-windows</TargetFramework>`, `<UseWPF>true</UseWPF>` — WPF on .NET 9, no WinForms
+- `<AssemblyName>Pulse</AssemblyName>` — the exe is `Pulse.exe`; the namespace stays `ResourceMonitor`
 - `<ServerGarbageCollection>false</ServerGarbageCollection>` — Workstation GC: lower memory floor
-- `<PublishReadyToRun>true</PublishReadyToRun>` — ~270ms cold start, +4 MB exe size
-- `<PublishReadyToRunComposite>true</PublishReadyToRunComposite>` — composite for better startup
-- Framework-dependent + single-file deployment → ~9 MB exe + 1.5 MB native DLLs
+- `ConcurrentGarbageCollection`, `TieredCompilation`, `TieredPGO` set to `true` — the .NET defaults, made explicit
+- `<PublishReadyToRun>true</PublishReadyToRun>` (Release) — precompiled IL: ~30% less JIT at cold start, +4 MB exe size
+- `<PublishReadyToRunComposite>true</PublishReadyToRunComposite>` (Release) — composite for better startup
+- `LibreHardwareMonitorLib` 0.9.6 from NuGet; `Reticle.Wpf` and `Reticle.Tokens` referenced as DLLs from `lib/Reticle`
+- Framework-dependent + single-file deployment → ~10 MB exe (Reticle and its fonts included) + 1.5 MB native DLLs
 
 ## What got removed for performance
 
 Earlier iterations measured ~6.77% idle CPU. Optimizations dropped it to ~1.5%:
 
-1. **Per-core CPU counters** (16-32 PerfCounters) — we collected them but never displayed. Removed.
+1. **Per-core CPU counters** (16-32 PerfCounters) — we collected them but never displayed. Removed. The per-core bars that came later read every core with one `NtQuerySystemInformation` call per tick.
 2. **GPU Engine counter sum** (100+ instances) — replaced by single LHM read for GPU load %.
 3. **GPU Adapter Memory counter** — replaced by LHM `GPU Memory Total/Used` sensors.
 4. **NetworkMonitor.UpdateWifi sync `netsh` call** — moved to `Task.Run` (was blocking UI up to 800 ms every 8 s).
 5. **DriveMonitor.Update sync `DriveInfo.GetDrives`** — moved to `Task.Run` (could stall on sleeping HDDs).
 
-See `docs/BUILD.md` for the measurement methodology and `measure.ps1`.
+Later releases removed whole layers:
+
+- v1.0.0: WinForms (the tray icon, see above) and `System.Management` (WMI)
+- v1.1.0: `PerformanceCounter` altogether, replaced by the Win32 calls of `NativeMetrics` (~45 ms → ~5 ms per tick)
+- v1.2.0: the layered transparent window (`AllowsTransparency`) and its drop shadow, replaced by the Mica backdrop
+
+See `docs/BUILD.md` for the measurement methodology and `measure-deep.ps1`.

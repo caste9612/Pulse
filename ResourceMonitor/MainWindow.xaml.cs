@@ -6,6 +6,8 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using ResourceMonitor.Services;
 
@@ -27,6 +29,17 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
     private bool _suppressSave;
     private bool _slowRunning;
     private bool _procRunning;
+    private bool _cornerPickerOpen;
+    private bool _ramTipOpen;
+
+    // il processo di ogni colore nelle barre dei core (-1 = colore libero): fino a tre processi di Top CPU sopra il mezzo core,
+    // ciascuno col suo colore finché non scende sotto un quarto di core, anche se cambia posto
+    private readonly int[] _slotPids = { -1, -1, -1 };
+    private const double TrackFromCores = 0.5, TrackUntilCores = 0.25;
+
+    // margine dai bordi dello schermo negli angoli e nella posizione del primo avvio: lo spazio S3 di Reticle (12 unità),
+    // lo stesso che il contenuto ha dentro la cornice
+    private const double CornerPadding = Reticle.Tokens.Space.S3;
     private DateTime _appStart = DateTime.UtcNow;
     private DateTime _machineBoot;
 
@@ -44,6 +57,16 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         _settings = settings;
         _metrics.Updated += OnMetricsUpdated;
 
+        CoreBars.Cores = _metrics.CpuCorePhysical;
+        CpuCoresText.ToolTip = CoreBars.ToolTip = BuildCoresTooltip();
+
+        // il tooltip della RAM si rifà a ogni secondo, ma non mentre è aperto: chi lo sta leggendo non lo vede cambiare
+        foreach (var host in new FrameworkElement[] { RamAvailableText, RamBar })
+        {
+            host.ToolTipOpening += (_, _) => _ramTipOpen = true;
+            host.ToolTipClosing += (_, _) => _ramTipOpen = false;
+        }
+
         _machineBoot = DateTime.Now - TimeSpan.FromMilliseconds(Environment.TickCount64);
 
         _slowTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -59,15 +82,29 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         Closing += OnClosing;
         SizeChanged += (_, _) => { if (_settingsLoaded) SaveGeometry(); };
         LocationChanged += (_, _) => { if (_settingsLoaded) SaveGeometry(); };
+
+        // la scelta dell'angolo si chiude con Esc, con un clic altrove nel widget e quando il widget perde il fuoco
+        PreviewMouseDown += (_, _) => { if (_cornerPickerOpen && !CornerPicker.IsMouseOver && !CornerButton.IsMouseOver) CloseCornerPicker(); };
+        PreviewKeyDown += (_, e) => { if (_cornerPickerOpen && e.Key == Key.Escape) { CloseCornerPicker(); e.Handled = true; } };
+        Deactivated += (_, _) => CloseCornerPicker();
     }
 
-    // colori di serie fissi (RAM viola, temperature ambra): categorie, non stati, quindi non vengono dal tema; sul chiaro
-    // quelli del tema scuro si leggono poco e passano a tonalità più scure. CPU, GPU, NET e DSK seguono già i toni del tema.
+    // colori di serie fissi (RAM viola, temperature ambra, i tre processi seguiti nelle barre dei core): categorie, non stati,
+    // quindi non vengono dal tema; sul chiaro quelli del tema scuro si leggono poco e passano a tonalità più scure. CPU, GPU, NET e
+    // DSK seguono già i toni del tema.
     private void UpdateSeriesBrushes()
     {
         bool light = Reticle.Wpf.ThemeManager.Current.Palette.IsLight;
         Resources["RamBrush"] = Frozen(light ? System.Windows.Media.Color.FromRgb(0x7C, 0x3A, 0xED) : System.Windows.Media.Color.FromRgb(0xB9, 0x87, 0xF7));
         Resources["TempBrush"] = Frozen(light ? System.Windows.Media.Color.FromRgb(0xC2, 0x41, 0x0C) : System.Windows.Media.Color.FromRgb(0xFF, 0x8A, 0x1F));
+        var processes = new System.Windows.Media.Brush[]
+        {
+            Frozen(light ? System.Windows.Media.Color.FromRgb(0xC2, 0x18, 0x5B) : System.Windows.Media.Color.FromRgb(0xFF, 0x6E, 0xB4)),
+            Frozen(light ? System.Windows.Media.Color.FromRgb(0x5B, 0x8C, 0x00) : System.Windows.Media.Color.FromRgb(0xB8, 0xE5, 0x5C)),
+            Frozen(light ? System.Windows.Media.Color.FromRgb(0x39, 0x49, 0xAB) : System.Windows.Media.Color.FromRgb(0x8C, 0x9E, 0xFF))
+        };
+        for (int i = 0; i < processes.Length; i++) Resources[$"ProcessBrush{i}"] = processes[i];
+        CoreBars.ShareFills = processes;
     }
 
     private static System.Windows.Media.SolidColorBrush Frozen(System.Windows.Media.Color color)
@@ -91,16 +128,14 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         else
         {
             var area = SystemParameters.WorkArea;
-            Left = area.Right - Width - 12;
-            Top = area.Top + 12;
+            Left = area.Right - Width - CornerPadding;
+            Top = area.Top + CornerPadding;
         }
         Topmost = _settings.Topmost;
         UpdatePinGlyph();
         _suppressSave = false;
         _settingsLoaded = true;
 
-        if (_metrics.RamTotalGb > 0)
-            RamDetail.Text = $"Totale {_metrics.RamTotalGb:0.0} GB";
         _slowTimer.Start();
         _procTimer.Start();
         _driveTimer.Start();
@@ -124,6 +159,9 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         Dispatcher.BeginInvoke(() =>
         {
             CpuValue.Text = $"{_metrics.Cpu:0.0}%";
+            CoreBars.Values = _metrics.CpuCores;
+            CoreBars.Shares = _metrics.CpuCoreShares;
+            CpuCoresText.Text = _metrics.CpuCores.Length > 0 ? $"≈ {_metrics.CpuCoresInUse:0.0} cores in use" : "";
             RamValue.Text = $"{_metrics.RamUsedPercent:0}%";
             RamUsed.Text = $"{_metrics.RamUsedGb:0.0} / {_metrics.RamTotalGb:0.0} GB";
             GpuValue.Text = $"{_metrics.Gpu:0}%";
@@ -138,9 +176,29 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             NetSpark.Values = _metrics.NetHistory.ToArray();
             DiskSpark.Values = _metrics.DiskHistory.ToArray();
 
-            RamDetail.Text = BuildRamDetail();
+            RamAvailableText.Text = $"{_metrics.RamAvailableGb:0.0} GB available";
+            RamBar.Parts = double.IsNaN(_metrics.RamInUseGb)
+                ? new[] { _metrics.RamUsedGb, 0, 0, _metrics.RamAvailableGb }   // senza le liste della memoria: usata e disponibile
+                : new[] { _metrics.RamInUseGb, _metrics.RamModifiedGb, _metrics.RamStandbyGb, _metrics.RamFreeGb };
+            if (!_ramTipOpen) RamAvailableText.ToolTip = RamBar.ToolTip = BuildRamTooltip();
             UptimeText.Text = BuildUptime();
         });
+    }
+
+    private string BuildCoresTooltip()
+    {
+        int logical = _metrics.CpuCorePhysical.Length;
+        int physical = _metrics.CpuCorePhysical.Distinct().Count();
+        var cores = physical < logical ? $"logical cores ({logical}, on {physical} physical cores)" : $"cores ({logical})";
+        var bars = physical < logical ? "one bar per logical core, those of the same physical core side by side" : "one bar per core";
+        var colors = _metrics.CoreSamplingDisabled ? ""
+            : _metrics.CoreSamplingAvailable
+                ? $"\nColours: the share of each core used by the Top CPU processes above half a core ({TrackFromCores * 100 / logical:0.0} %), " +
+                  "up to three (the small square next to the name), sampled by the kernel 100 times a second, only while there is one; " +
+                  "the rest in the CPU colour."
+                : "\nTo see in colour which Top CPU processes use the cores, run Pulse as administrator.";
+        return $"Sum of the loads of the {cores}: how many full cores the current work is worth.\n" +
+               $"Under the graph, {bars}: many medium bars mean parallel work, a single full one a single thread." + colors;
     }
 
     private string BuildPowerEstimate()
@@ -182,23 +240,36 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         return $"VRAM {usedGb:F1} GB";
     }
 
-    private string BuildRamDetail()
+    // le parti della barra della RAM spiegate, poi la memoria impegnata e il file di paging (prima erano sigle nella riga)
+    private string BuildRamTooltip()
     {
-        var parts = new List<string>();
-        if (_metrics.RamTotalGb > 0) parts.Add($"Totale {_metrics.RamTotalGb:0.0}G");
-        if (_metrics.RamAvailableGb > 0) parts.Add($"Disp {_metrics.RamAvailableGb:0.0}G");
-        if (_metrics.RamCachedGb > 0) parts.Add($"Cache {_metrics.RamCachedGb:0.0}G");
-        if (_metrics.RamCommittedGb > 0)
-            parts.Add($"Commit {_metrics.RamCommittedGb:0.0}/{_metrics.RamCommitLimitGb:0.0}G");
-        if (_metrics.PageFilePercent > 0)
-            parts.Add($"PF {_metrics.PageFilePercent:0}%");
-        return string.Join("  •  ", parts);
+        var m = _metrics;
+        var lines = new List<string>();
+        if (!double.IsNaN(m.RamInUseGb))
+        {
+            lines.Add($"In use {m.RamInUseGb:0.0} GB: processes, drivers and the system.");
+            lines.Add($"Modified {m.RamModifiedGb:0.0} GB: to be written to disk before it can be reused.");
+            lines.Add($"Cached {m.RamStandbyGb:0.0} GB: data and programs kept ready, given back by Windows as soon as it's needed.");
+            lines.Add($"Free {m.RamFreeGb:0.0} GB.");
+            lines.Add($"Available {m.RamAvailableGb:0.0} GB: cached plus free, what programs can still take.");
+        }
+        else
+        {
+            lines.Add($"Used {m.RamUsedGb:0.0} GB, available {m.RamAvailableGb:0.0} GB.");
+        }
+        if (m.RamCommitLimitGb > 0)
+            lines.Add($"Committed {m.RamCommittedGb:0.0} of {m.RamCommitLimitGb:0.0} GB: what programs have asked for, against the limit of RAM plus page file.");
+        lines.Add(m.PageFileTotalGb > 0
+            ? $"Page file: {m.PageFileUsedGb:0.00} GB in use of {m.PageFileTotalGb:0.0} GB."
+            : "No page file.");
+        return string.Join("\n", lines);
     }
 
-    private string BuildUptime()
+    private string BuildUptime() => FormatUptime(DateTime.Now - _machineBoot);
+
+    private static string FormatUptime(TimeSpan up)
     {
-        var up = DateTime.Now - _machineBoot;
-        if (up.TotalDays >= 1) return $"uptime {(int)up.TotalDays}g {up.Hours}h {up.Minutes}m";
+        if (up.TotalDays >= 1) return $"uptime {(int)up.TotalDays}d {up.Hours}h {up.Minutes}m";
         if (up.TotalHours >= 1) return $"uptime {up.Hours}h {up.Minutes}m";
         return $"uptime {up.Minutes}m";
     }
@@ -232,13 +303,13 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             {
                 CpuTemp.Text = _hw.CpuTempFromWmi ? $"{t1:0}°C*" : $"{t1:0}°C";
                 CpuTemp.ToolTip = _hw.CpuTempFromWmi
-                    ? "Temp da WMI Thermal Zone (approssimata).\nEsegui come admin per lettura MSR esatta."
+                    ? "Temperature from the WMI thermal zone (approximate).\nRun as administrator for the exact MSR reading."
                     : null;
             }
             else
             {
                 CpuTemp.Text = "n/a";
-                CpuTemp.ToolTip = "Temperatura CPU non disponibile.\nEsegui come amministratore per abilitarla.";
+                CpuTemp.ToolTip = "CPU temperature not available.\nRun Pulse as administrator to enable it.";
             }
 
             GpuTemp.Text = _hw.GpuTempC is double t2 && t2 > 5 ? $"{t2:0}°C" : "";
@@ -284,11 +355,18 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         try
         {
             await Task.Run(() => _proc.Update());
-            TopCpuList.ItemsSource = _proc.TopByCpu.Select(p => new ProcessRow
+            var topCpu = _proc.TopByCpu;
+            TrackLeaders(topCpu);
+            // a schermo la percentuale della CPU; nel tooltip lo stesso valore in core, l'unità delle barre (su 32 core logici un
+            // thread sempre al lavoro è il 3 %, cioè 1 core)
+            int processors = Environment.ProcessorCount;
+            TopCpuList.ItemsSource = topCpu.Select(p => new ProcessRow
             {
                 Pid = p.Pid,
                 Name = p.Name,
-                Value = $"{p.CpuPercent,5:0.0}%"
+                Value = $"{p.CpuPercent,5:0.0}%",
+                Tip = $"{p.CpuPercent * processors / 100:0.00} cores: how many full cores this process is worth",
+                Slot = _metrics.CoreSamplingAvailable ? Array.IndexOf(_slotPids, p.Pid) : -2
             }).ToArray();
             TopRamList.ItemsSource = _proc.TopByMemory.Select(p => new ProcessRow
             {
@@ -309,6 +387,24 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         }
     }
 
+    // nei colori delle barre dei core fino a tre processi di Top CPU: entra chi usa almeno mezzo core, esce chi scende sotto un
+    // quarto (due soglie, così chi sta a cavallo non lampeggia); chi esce libera il suo colore, chi entra ne prende uno libero.
+    // Il campionamento del kernel resta acceso solo finché c'è almeno un processo da seguire
+    private void TrackLeaders(IReadOnlyList<ProcessSample> top)
+    {
+        if (!_metrics.CoreSamplingAvailable) return;
+        int processors = Environment.ProcessorCount;
+        var leaders = top
+            .Where(p => p.CpuPercent * processors / 100 >= (Array.IndexOf(_slotPids, p.Pid) >= 0 ? TrackUntilCores : TrackFromCores))
+            .Take(CoreSampler.Slots).Select(p => p.Pid).ToArray();
+        for (int s = 0; s < _slotPids.Length; s++)
+            if (Array.IndexOf(leaders, _slotPids[s]) < 0) _slotPids[s] = -1;
+        foreach (int pid in leaders)
+            if (Array.IndexOf(_slotPids, pid) < 0) _slotPids[Array.IndexOf(_slotPids, -1)] = pid;
+        _metrics.TrackProcesses(_slotPids);
+        _metrics.SetCoreSampling(leaders.Length > 0);
+    }
+
     private async void BuildDriveList()
     {
         // DriveInfo.GetDrives può bloccare se un HDD sta dormendo. Offload su background.
@@ -316,7 +412,7 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         DriveList.ItemsSource = _drive.Drives.Select(d => new DriveRow
         {
             Name = d.Name,
-            Caption = $"{FmtGb(d.FreeGb)} di {FmtGb(d.TotalGb)}",
+            Caption = $"{FmtGb(d.FreeGb)} free of {FmtGb(d.TotalGb)}",
             UsedPercent = d.UsedPercent
         }).ToArray();
     }
@@ -370,12 +466,199 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         if (Topmost)
         {
             PinButton.SetResourceReference(ForegroundProperty, "Reticle.Brush.Accent");
-            PinButton.ToolTip = "Sempre in primo piano: ON (clicca per disattivare)";
+            PinButton.ToolTip = "Always on top: on (click to turn off)";
         }
         else
         {
             PinButton.SetResourceReference(ForegroundProperty, "Reticle.Brush.Text.Muted");
-            PinButton.ToolTip = "Sempre in primo piano: OFF (clicca per attivare)";
+            PinButton.ToolTip = "Always on top: off (click to turn on)";
+        }
+    }
+
+    private void CornerButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_cornerPickerOpen) CloseCornerPicker();
+        else OpenCornerPicker();
+    }
+
+    // le frecce compaiono sotto il bottone e si aprono dal centro verso l'angolo che indicano: traslazione e dissolvenza con le
+    // durate di Reticle, niente scala sui bottoni (01-bottone); con le animazioni di Windows spente compaiono e basta
+    private void OpenCornerPicker()
+    {
+        _cornerPickerOpen = true;
+        CornerButton.SetResourceReference(ForegroundProperty, "Reticle.Brush.Accent");
+        CornerPicker.Visibility = Visibility.Visible;
+        CornerPicker.IsHitTestVisible = true;
+        CornerPicker.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var root = (FrameworkElement)CornerPicker.Parent;
+        double width = CornerPicker.DesiredSize.Width;
+        double center = CornerButton.TranslatePoint(new Point(CornerButton.ActualWidth / 2, 0), root).X;
+        CornerPicker.Margin = new Thickness(Math.Clamp(center - width / 2, 0, Math.Max(0, root.ActualWidth - width)), 2, 0, 0);
+
+        if (!Reticle.Wpf.ThemeManager.Current.Capabilities.AnimationsEnabled)
+        {
+            CornerPicker.BeginAnimation(OpacityProperty, null);
+            return;
+        }
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        CornerPicker.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, Reticle.Tokens.Motion.Base) { EasingFunction = ease });
+        foreach (var arrow in new[] { CornerTopLeft, CornerTopRight, CornerBottomLeft, CornerBottomRight })
+        {
+            // partono tutte dal centro della tessera, mezza cella più in là, e si aprono verso il proprio angolo
+            var (right, bottom) = CornerOf(arrow);
+            double dx = arrow.DesiredSize.Width / 2, dy = arrow.DesiredSize.Height / 2;
+            if (arrow.RenderTransform is not TranslateTransform move) arrow.RenderTransform = move = new TranslateTransform();
+            move.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(right ? -dx : dx, 0, Reticle.Tokens.Motion.Reveal) { EasingFunction = ease });
+            move.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(bottom ? -dy : dy, 0, Reticle.Tokens.Motion.Reveal) { EasingFunction = ease });
+        }
+    }
+
+    private void CloseCornerPicker()
+    {
+        if (!_cornerPickerOpen) return;
+        _cornerPickerOpen = false;
+        CornerButton.ClearValue(ForegroundProperty);
+        CornerPicker.IsHitTestVisible = false;
+        if (!Reticle.Wpf.ThemeManager.Current.Capabilities.AnimationsEnabled)
+        {
+            CornerPicker.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var fade = new DoubleAnimation(0, Reticle.Tokens.Motion.Fast) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
+        // riaperta durante la dissolvenza: resta a schermo
+        fade.Completed += (_, _) => { if (!_cornerPickerOpen) CornerPicker.Visibility = Visibility.Collapsed; };
+        CornerPicker.BeginAnimation(OpacityProperty, fade);
+    }
+
+    private void CornerArrow_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement arrow) return;
+        CloseCornerPicker();
+        var (right, bottom) = CornerOf(arrow);
+        MoveToCorner(right, bottom);
+    }
+
+    private static (bool Right, bool Bottom) CornerOf(FrameworkElement arrow) =>
+        arrow.Tag is string corner
+            ? (corner.EndsWith("Right", StringComparison.Ordinal), corner.StartsWith("Bottom", StringComparison.Ordinal))
+            : (false, false);
+
+    // l'angolo dell'area di lavoro del monitor su cui sta il widget, quindi mai sopra la barra delle applicazioni; in pixel di
+    // Windows, perché con monitor a scale diverse le coordinate WPF non bastano. La posizione nuova si salva da sola (LocationChanged)
+    private void MoveToCorner(bool right, bool bottom)
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var rect)) return;
+        var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), ref info)) return;
+        int pad = (int)Math.Round(CornerPadding * GetDpiForWindow(hwnd) / 96.0);
+        var work = info.rcWork;
+        int x = right ? work.Right - (rect.Right - rect.Left) - pad : work.Left + pad;
+        int y = bottom ? work.Bottom - (rect.Bottom - rect.Top) - pad : work.Top + pad;
+        SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    // larghezze minime dei grafici quando il widget si adatta al contenuto: sparkline e barre restano leggibili
+    private const double FitGraphWidth = 96, FitDriveBarWidth = 60;
+
+    private void FitButton_Click(object sender, RoutedEventArgs e) => FitToContent();
+
+    // la misura minima che mostra tutto, presa dal layout vero: in altezza esattamente il contenuto (niente barra di scorrimento,
+    // niente spazio in fondo), in larghezza la più stretta in cui nessun valore è tagliato, nemmeno quando arriva al suo testo più
+    // lungo, con i grafici alla loro larghezza minima. Le righe di Top CPU e Top RAM non contano: i nomi si accorciano con i puntini
+    // per costruzione. Il widget resta attaccato al bordo destro o inferiore dello schermo se ci stava, e comunque dentro l'area di
+    // lavoro. L'elenco dei dischi arriva qualche secondo dopo l'avvio (un disco che dorme): adattare prima lo lascerebbe fuori
+    private void FitToContent()
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var before)) return;
+        var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        bool haveWork = GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), ref info);
+        int near = (int)Math.Round(2 * CornerPadding * GetDpiForWindow(hwnd) / 96.0);
+        bool right = haveWork && info.rcWork.Right - before.Right <= near;
+        bool bottom = haveWork && info.rcWork.Bottom - before.Bottom <= near;
+
+        // 1. l'altezza alla larghezza di adesso: dopo, la barra di scorrimento non c'è più e non ruba larghezza al calcolo
+        FitHeight();
+
+        // 2. la larghezza naturale di ogni riga con i grafici fermi al minimo: misurate senza limite di larghezza, le colonne * fanno
+        // come le Auto e i grafici valgono la larghezza data qui solo per la misura (Width, non MinWidth: la barra dei dischi di
+        // Reticle, senza limite, chiede più del minimo)
+        var graphs = Graphs().ToList();
+        foreach (var (element, min) in graphs) element.Width = min;
+        // i valori che crescono si misurano col loro testo più lungo: una misura presa a traffico basso o subito dopo l'avvio non
+        // taglia niente quando arrivano i MB/s o i giorni di uptime. Un valore che su questo PC non c'è (vuoto) resta vuoto
+        double fast = 999.9 * 1024 * 1024;
+        var widest = new (System.Windows.Controls.TextBlock Block, string Text)[]
+        {
+            (CpuValue, $"{100.0:0.0}%"), (RamValue, "100%"), (GpuValue, "100%"),
+            (NetValue, $"↓ {Fmt(fast)}  ↑ {Fmt(fast)}"), (DiskValue, $"↓ {Fmt(fast)}  ↑ {Fmt(fast)}"),
+            (NetPing, "ping 999 ms"), (UptimeText, FormatUptime(new TimeSpan(99, 23, 59, 0))), (PowerText, "PC ~999 W"),
+            (CpuPower, $"{999.9:0.0}W"), (CpuTemp, "100°C"), (GpuTemp, "100°C"), (DiskTemp, "100°C")
+        };
+        var shown = widest.Select(w => w.Block.Text).ToArray();
+        for (int i = 0; i < widest.Length; i++)
+            if (!string.IsNullOrEmpty(shown[i])) widest[i].Block.Text = widest[i].Text;
+        var unlimited = new Size(double.PositiveInfinity, double.PositiveInfinity);
+        double rows = 0;
+        foreach (UIElement child in ContentPanel.Children)
+        {
+            if (child == TopPanels) continue;
+            child.Measure(unlimited);
+            rows = Math.Max(rows, child.DesiredSize.Width);
+        }
+        HeaderInfo.Measure(unlimited);
+        HeaderButtons.Measure(unlimited);
+        foreach (var (element, _) in graphs) element.ClearValue(WidthProperty);
+        for (int i = 0; i < widest.Length; i++) widest[i].Block.Text = shown[i];
+        double header = HeaderInfo.DesiredSize.Width + HeaderButtons.DesiredSize.Width + DragHandle.Padding.Left + DragHandle.Padding.Right;
+        // a ciascuna si aggiunge quello che la finestra ha intorno: cornice e margini per il contenuto (dalla larghezza del pannello
+        // che scorre, che comprende la barra: WPF la toglie un passaggio dopo), cornice per l'intestazione
+        double around = ActualWidth - ContentScroll.ActualWidth + ContentPanel.Margin.Left + ContentPanel.Margin.Right;
+        double width = Math.Max(rows + around, header + ActualWidth - DragHandle.ActualWidth);
+        Width = Math.Max(MinWidth, Math.Ceiling(width));
+        FitHeight();
+
+        // 3. al bordo a cui era attaccato, e dentro l'area di lavoro
+        if (!haveWork || !GetWindowRect(hwnd, out var after)) return;
+        int w = after.Right - after.Left, h = after.Bottom - after.Top;
+        int x = right ? before.Right - w : after.Left;
+        int y = bottom ? before.Bottom - h : after.Top;
+        x = Math.Max(info.rcWork.Left, Math.Min(x, info.rcWork.Right - w));
+        y = Math.Max(info.rcWork.Top, Math.Min(y, info.rcWork.Bottom - h));
+        if (x != after.Left || y != after.Top)
+            SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    // l'altezza esatta del contenuto: quanto manca o avanza nel pannello che scorre; un pixel in più se l'arrotondamento lascia la barra
+    private void FitHeight()
+    {
+        UpdateLayout();
+        Height = Math.Max(MinHeight, Math.Ceiling(ActualHeight - ContentScroll.ViewportHeight + ContentScroll.ExtentHeight));
+        UpdateLayout();
+        for (int i = 0; i < 3 && ContentScroll.ExtentHeight > ContentScroll.ViewportHeight; i++)
+        {
+            Height += 1;
+            UpdateLayout();
+        }
+    }
+
+    // i grafici, che si accorciano quando il widget si stringe, con la larghezza minima che conservano adattando la misura
+    private IEnumerable<(FrameworkElement Element, double Min)> Graphs()
+    {
+        foreach (var graph in new FrameworkElement[] { CpuSpark, RamSpark, GpuSpark, NetSpark, DiskSpark, CoreBars, RamBar })
+            yield return (graph, FitGraphWidth);
+        foreach (var bar in Descendants<System.Windows.Controls.ProgressBar>(DriveList))
+            yield return (bar, FitDriveBarWidth);
+    }
+
+    private static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) yield return match;
+            foreach (var deeper in Descendants<T>(child)) yield return deeper;
         }
     }
 
@@ -469,8 +752,8 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         var row = ExtractRow(sender);
         if (row is null) return;
         var result = MessageBox.Show(
-            $"Terminare {row.Name} (PID {row.Pid})?",
-            "Conferma",
+            $"End {row.Name} (PID {row.Pid})?",
+            "Confirm",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
         if (result != MessageBoxResult.Yes) return;
@@ -481,7 +764,7 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Impossibile terminare: {ex.Message}", "Errore",
+            MessageBox.Show($"Couldn't end the process: {ex.Message}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -533,6 +816,30 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
     [DllImport("user32.dll")]
     private static extern bool ReleaseCapture();
 
+    private const uint MONITOR_DEFAULTTONEAREST = 2;
+    private const uint SWP_NOSIZE = 0x0001, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
+
     private void ResizeGrip_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.LeftButton != MouseButtonState.Pressed) return;
@@ -548,6 +855,9 @@ internal sealed class ProcessRow
     public int Pid { get; init; }
     public string Name { get; init; } = string.Empty;
     public string Value { get; init; } = string.Empty;
+    public string? Tip { get; init; }
+    /// <summary>Solo Top CPU: il colore del processo nelle barre dei core (0–2), -1 se non è seguito, -2 senza campionamento.</summary>
+    public int Slot { get; init; } = -2;
 }
 
 internal sealed class DriveRow

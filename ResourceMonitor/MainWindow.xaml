@@ -21,6 +21,11 @@
              RAM viola e temperature ambra non seguono l'accento: qui i valori del tema scuro, UpdateSeriesBrushes li scurisce sul chiaro -->
         <SolidColorBrush x:Key="RamBrush" Color="#B987F7"/>
         <SolidColorBrush x:Key="TempBrush" Color="#FF8A1F"/>
+        <!-- i tre processi di Top CPU seguiti nelle barre dei core: tinte che il widget non usa già (rosa, lime, pervinca), lontane
+             dal ciano della CPU; sul chiaro UpdateSeriesBrushes le scurisce -->
+        <SolidColorBrush x:Key="ProcessBrush0" Color="#FF6EB4"/>
+        <SolidColorBrush x:Key="ProcessBrush1" Color="#B8E55C"/>
+        <SolidColorBrush x:Key="ProcessBrush2" Color="#8C9EFF"/>
 
         <Style x:Key="SectionLabel" TargetType="rt:TrackedText" BasedOn="{StaticResource Reticle.Tracked.Label}">
             <Setter Property="VerticalAlignment" Value="Center"/>
@@ -60,12 +65,12 @@
 
         <ContextMenu x:Key="ProcessMenu" x:Shared="False"
                      DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
-            <MenuItem Header="Apri cartella file" Click="ProcOpenFolder_Click" CommandParameter="{Binding}"/>
-            <MenuItem Header="Propriet&#224; file" Click="ProcProperties_Click" CommandParameter="{Binding}"/>
+            <MenuItem Header="Open file location" Click="ProcOpenFolder_Click" CommandParameter="{Binding}"/>
+            <MenuItem Header="Properties" Click="ProcProperties_Click" CommandParameter="{Binding}"/>
             <Separator/>
-            <MenuItem Header="Termina processo" Click="ProcKill_Click" CommandParameter="{Binding}"/>
+            <MenuItem Header="End process" Click="ProcKill_Click" CommandParameter="{Binding}"/>
             <Separator/>
-            <MenuItem Header="Cerca online" Click="ProcSearch_Click" CommandParameter="{Binding}"/>
+            <MenuItem Header="Search online" Click="ProcSearch_Click" CommandParameter="{Binding}"/>
         </ContextMenu>
         <DataTemplate x:Key="ProcessRowTemplate">
             <Grid Margin="0,1,0,1" Background="Transparent" ContextMenu="{StaticResource ProcessMenu}">
@@ -75,6 +80,42 @@
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding Name}" Style="{StaticResource ProcessName}"/>
                 <TextBlock Grid.Column="1" Text="{Binding Value}" Style="{StaticResource ProcessValue}" Margin="8,0,0,0"/>
+            </Grid>
+        </DataTemplate>
+        <!-- quadratino del colore del processo nelle barre dei core (Slot 0–2): trasparente se il processo non è seguito (-1),
+             assente se il campionamento del kernel non è disponibile, cioè Pulse non è da amministratore (-2) -->
+        <Style x:Key="ProcessSwatch" TargetType="Rectangle">
+            <Setter Property="Width" Value="6"/>
+            <Setter Property="Height" Value="6"/>
+            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Fill" Value="Transparent"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Slot}" Value="-2">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Slot}" Value="0">
+                    <Setter Property="Fill" Value="{DynamicResource ProcessBrush0}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Slot}" Value="1">
+                    <Setter Property="Fill" Value="{DynamicResource ProcessBrush1}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Slot}" Value="2">
+                    <Setter Property="Fill" Value="{DynamicResource ProcessBrush2}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <!-- Top CPU: il quadratino del colore, la percentuale della CPU, lo stesso valore in core nel tooltip -->
+        <DataTemplate x:Key="CpuProcessRowTemplate">
+            <Grid Margin="0,1,0,1" Background="Transparent" ContextMenu="{StaticResource ProcessMenu}" ToolTip="{Binding Tip}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Rectangle Style="{StaticResource ProcessSwatch}"/>
+                <TextBlock Grid.Column="1" Text="{Binding Name}" Style="{StaticResource ProcessName}"/>
+                <TextBlock Grid.Column="2" Text="{Binding Value}" Style="{StaticResource ProcessValue}" Margin="8,0,0,0"/>
             </Grid>
         </DataTemplate>
     </rt:ReticleWindow.Resources>
@@ -90,14 +131,22 @@
             <Border x:Name="DragHandle" Grid.Row="0" Height="32" Background="Transparent" Padding="12,0,4,0"
                     MouseLeftButtonDown="DragHandle_MouseLeftButtonDown">
                 <DockPanel LastChildFill="True">
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel x:Name="HeaderButtons" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- adatta: due righe e una doppia freccia tra le due, il widget prende la misura del contenuto (FitToContent) -->
+                        <Button x:Name="FitButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
+                                rt:Rt.Icon="M3,2.5 H13 M3,13.5 H13 M8,5 V11 M6,7 L8,5 L10,7 M6,9 L8,11 L10,9"
+                                ToolTip="Fit the size to the content" Click="FitButton_Click"/>
+                        <!-- le quattro tacche d'angolo di Reticle: apre la scelta dell'angolo (CornerPicker) -->
+                        <Button x:Name="CornerButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
+                                rt:Rt.Icon="M2.5,6.5 V2.5 H6.5 M9.5,2.5 H13.5 V6.5 M13.5,9.5 V13.5 H9.5 M6.5,13.5 H2.5 V9.5"
+                                ToolTip="Move to a corner of the screen" Click="CornerButton_Click"/>
                         <Button x:Name="PinButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
                                 rt:Rt.Icon="M5.5,1.5 H10.5 M6.5,1.5 V6.5 L4.5,9.5 H11.5 L9.5,6.5 V1.5 M8,9.5 V14.5"
-                                ToolTip="Sempre in primo piano (clicca per togglare)" Click="PinButton_Click"/>
+                                ToolTip="Always on top (click to toggle)" Click="PinButton_Click"/>
                         <Button x:Name="HideButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
-                                rt:Rt.Icon="M3,8 H13" ToolTip="Nascondi (resta in tray)" Click="HideButton_Click"/>
+                                rt:Rt.Icon="M3,8 H13" ToolTip="Hide (stays in the tray)" Click="HideButton_Click"/>
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel x:Name="HeaderInfo" Orientation="Horizontal" VerticalAlignment="Center">
                         <Path Width="16" Height="16" VerticalAlignment="Center"
                               Stroke="{DynamicResource Reticle.Brush.Accent}" StrokeThickness="1.6"
                               StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
@@ -105,13 +154,13 @@
                         <rt:TrackedText Text="Pulse" Style="{StaticResource Reticle.Tracked.Legend}" Margin="8,0,0,0" VerticalAlignment="Center"/>
                         <TextBlock x:Name="UptimeText" Style="{StaticResource InfoText}" Margin="14,0,0,0"/>
                         <TextBlock x:Name="PowerText" Style="{StaticResource InfoText}" Foreground="{DynamicResource TempBrush}" Margin="14,0,0,0"
-                                   ToolTip="Consumo PC totale stimato (CPU + GPU + baseline ~30W)"/>
+                                   ToolTip="Estimated total PC power (CPU + GPU + about 30 W for the rest)"/>
                     </StackPanel>
                 </DockPanel>
             </Border>
 
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,2">
-                <StackPanel Margin="12,4,12,12">
+            <ScrollViewer x:Name="ContentScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,2">
+                <StackPanel x:Name="ContentPanel" Margin="12,4,12,12">
 
                     <!-- CPU -->
                     <Grid>
@@ -119,6 +168,10 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <rt:TrackedText Text="CPU" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource Reticle.Brush.Info}"/>
                             <TextBlock x:Name="CpuValue" Style="{StaticResource BigValue}" Text="—"/>
@@ -129,28 +182,39 @@
                         <Border Grid.Column="1" Style="{StaticResource SparkBed}">
                             <ctrl:Sparkline x:Name="CpuSpark" Height="26" Stroke="{DynamicResource Reticle.Brush.Info}" MaxValue="100"/>
                         </Border>
+                        <!-- sotto il grafico il carico di ogni core logico, a strati nei colori dei processi seguiti quando c'è il
+                             campionamento del kernel; a sinistra quanti core pieni vale (ToolTip da MainWindow) -->
+                        <TextBlock x:Name="CpuCoresText" Grid.Row="1" Style="{StaticResource DimText}" Text=""/>
+                        <ctrl:CoreBars x:Name="CoreBars" Grid.Row="1" Grid.Column="1" Height="12" Margin="14,2,0,2"
+                                       Fill="{DynamicResource Reticle.Brush.Info}"/>
                     </Grid>
 
                     <Rectangle Style="{StaticResource MetricDivider}"/>
 
                     <!-- RAM -->
-                    <StackPanel>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <rt:TrackedText Text="RAM" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource RamBrush}"/>
-                                <TextBlock x:Name="RamValue" Style="{StaticResource BigValue}" Text="—"/>
-                                <TextBlock x:Name="RamUsed" Style="{StaticResource InfoText}" Margin="10,0,0,0" Text=""/>
-                            </StackPanel>
-                            <Border Grid.Column="1" Style="{StaticResource SparkBed}">
-                                <ctrl:Sparkline x:Name="RamSpark" Height="26" Stroke="{DynamicResource RamBrush}" MaxValue="100"/>
-                            </Border>
-                        </Grid>
-                        <TextBlock x:Name="RamDetail" Style="{StaticResource DimText}" Text="" Margin="0,0,0,2"/>
-                    </StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <rt:TrackedText Text="RAM" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource RamBrush}"/>
+                            <TextBlock x:Name="RamValue" Style="{StaticResource BigValue}" Text="—"/>
+                            <TextBlock x:Name="RamUsed" Style="{StaticResource InfoText}" Margin="10,0,0,0" Text=""/>
+                        </StackPanel>
+                        <Border Grid.Column="1" Style="{StaticResource SparkBed}">
+                            <ctrl:Sparkline x:Name="RamSpark" Height="26" Stroke="{DynamicResource RamBrush}" MaxValue="100"/>
+                        </Border>
+                        <!-- sotto il grafico la composizione della memoria come in Gestione attività, a sinistra quanta ne resta da
+                             usare; il dettaglio (le quattro parti, impegnata, file di paging) nel tooltip, da MainWindow -->
+                        <TextBlock x:Name="RamAvailableText" Grid.Row="1" Style="{StaticResource DimText}" Text="" Margin="0,0,0,2"/>
+                        <ctrl:MemoryBar x:Name="RamBar" Grid.Row="1" Grid.Column="1" Height="8" Margin="14,0,0,2" VerticalAlignment="Center"
+                                        Fill="{DynamicResource RamBrush}"/>
+                    </Grid>
 
                     <Rectangle Style="{StaticResource MetricDivider}"/>
 
@@ -232,16 +296,17 @@
                         </ItemsControl>
                     </StackPanel>
 
-                    <rt:Ruler Margin="0,12,0,12"/>
+                    <!-- 8 sopra e sotto (erano 12), per fare posto alla riga dei core sotto la CPU senza allungare troppo il widget -->
+                    <rt:Ruler Margin="0,8,0,8"/>
 
                     <!-- TOP PROCESSES: due Panel con la legenda sulla cornice -->
-                    <Grid>
+                    <Grid x:Name="TopPanels">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <rt:Panel Grid.Column="0" Legend="Top CPU" Margin="0,0,6,0">
-                            <ItemsControl x:Name="TopCpuList" ItemTemplate="{StaticResource ProcessRowTemplate}"/>
+                            <ItemsControl x:Name="TopCpuList" ItemTemplate="{StaticResource CpuProcessRowTemplate}"/>
                         </rt:Panel>
                         <rt:Panel Grid.Column="1" Legend="Top RAM" Margin="6,0,0,0">
                             <ItemsControl x:Name="TopRamList" ItemTemplate="{StaticResource ProcessRowTemplate}"/>
@@ -257,6 +322,30 @@
                 <Path Width="12" Height="12" Margin="6" Stroke="{DynamicResource Reticle.Brush.Text.Muted}" StrokeThickness="1"
                       IsHitTestVisible="False" Data="M 0,12 L 12,0 M 4,12 L 12,4 M 8,12 L 12,8"/>
             </Border>
+
+            <!-- scelta dell'angolo, sopra il contenuto e sotto il bottone (Margin.Left lo calcola OpenCornerPicker): le frecce stanno
+                 nella griglia come gli angoli dello schermo che indicano, dentro una tessera con le tacche di Reticle -->
+            <rt:TickBorder x:Name="CornerPicker" Grid.Row="1" Variant="Tile" HorizontalAlignment="Left" VerticalAlignment="Top"
+                           Visibility="Collapsed">
+                <Grid Margin="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Button x:Name="CornerTopLeft" Tag="TopLeft" Style="{StaticResource Reticle.Button.Icon}" Height="28"
+                            rt:Rt.Icon="M4.5,10 V4.5 H10 M4.5,4.5 L12.5,12.5" ToolTip="Top left" Click="CornerArrow_Click"/>
+                    <Button x:Name="CornerTopRight" Grid.Column="1" Tag="TopRight" Style="{StaticResource Reticle.Button.Icon}" Height="28"
+                            rt:Rt.Icon="M6,4.5 H11.5 V10 M11.5,4.5 L3.5,12.5" ToolTip="Top right" Click="CornerArrow_Click"/>
+                    <Button x:Name="CornerBottomLeft" Grid.Row="1" Tag="BottomLeft" Style="{StaticResource Reticle.Button.Icon}" Height="28"
+                            rt:Rt.Icon="M4.5,6 V11.5 H10 M4.5,11.5 L12.5,3.5" ToolTip="Bottom left" Click="CornerArrow_Click"/>
+                    <Button x:Name="CornerBottomRight" Grid.Row="1" Grid.Column="1" Tag="BottomRight" Style="{StaticResource Reticle.Button.Icon}" Height="28"
+                            rt:Rt.Icon="M11.5,6 V11.5 H6 M11.5,11.5 L3.5,3.5" ToolTip="Bottom right" Click="CornerArrow_Click"/>
+                </Grid>
+            </rt:TickBorder>
         </Grid>
     </rt:TickBorder>
 </rt:ReticleWindow>

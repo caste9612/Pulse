@@ -31,10 +31,10 @@ Pulse was built with obsessive focus on minimising its own footprint. After seve
 | **Handles** | ~850 | Stable, no leak |
 | **Threads** | ~20 | Stable |
 | **RAM growth over 2 min** | ~0 MB | No leaks measured |
-| **Single-file exe** | 7 MB (10.3 MB from v1.2.0) | + 1.5 MB of native LHM dependencies; v1.2.0 embeds the Reticle UI library and its fonts |
+| **Single-file exe** | 7 MB (10.3 MB in v1.2.0, 10.5 MB in v1.3.0) | + 1.5 MB of native LHM dependencies; v1.2.0 embeds the Reticle UI library and its fonts |
 | **Installer** | 4.4 MB | + portable zip 3.7 MB |
 
-The table was measured on v1.1.0. For v1.2.0 see below.
+The table was measured on v1.1.0. For v1.2.0 and v1.3.0 see below.
 
 ### v1.2.0: the Reticle UI
 
@@ -49,12 +49,28 @@ v1.2.0 moves the widget to Reticle, the author's WPF design system, and drops th
 | Private memory / working set | 145 / 200 MB | 130 / 211 MB |
 | Cold start (message loop ready) | ~506 ms | ~540 ms |
 
+### v1.3.0: lighter sensors, Reticle 0.6
+
+v1.3.0 reads NVIDIA GPUs directly with NVML instead of LibreHardwareMonitor's 41 sensors (a sensor read went from 84 to 4.8 ms), reads only the GPU it shows, starts `netsh` only on Wi-Fi, and moves to Reticle 0.6, whose window no longer uses WPF's `WindowChrome`. Measured on 11/10/2026 with the PC idle, same 622 × 502 window, v1.2.0, the v1.2.0 code on Reticle 0.6 alone, and v1.3.0 alternated in two 45 s rounds (not elevated; v1.2.0 measured again in this session, so compare within this table only):
+
+| Metric | v1.2.0 | Reticle 0.6 alone | v1.3.0 |
+|---|---|---|---|
+| CPU, widget visible | 2.50% of one core | 2.72% | **2.10%** |
+| CPU, widget hidden in the tray | 2.65% | 2.55% | **1.53%** |
+| Compositor (dwm) CPU, widget visible | 6.6% | 4.1% | **2.5%** |
+| Compositor (dwm) GPU, widget visible | 1.67% | 0.60% | **0.57%** |
+| GPU (3D engine) of Pulse | 0.05% | 0.03% | 0.04% |
+| Private memory / working set | 130 / 211 MB | 130 / 209 MB | 131 / 214 MB |
+| Cold start (message loop ready) | ~590 ms | ~477 ms | ~510 ms |
+
+Hidden in the tray the widget draws nothing, so that row is the data collection alone: about one point of a core less, what NVML saves every two seconds. With the widget visible part of it goes to the new core and memory bars. The compositor rows are the noisiest (other windows on screen move them too), but they went down in both rounds: the window without `WindowChrome` costs Windows less.
+
 ### How we got here (the things that matter)
 
 1. **No PerformanceCounter** — every metric is read via direct Win32 P/Invoke (`GetSystemTimes`, `GetPerformanceInfo`, `GetIfTable2`, `NtQuerySystemInformation`, `CallNtPowerInformation`). Each tick is ~5 ms instead of the ~45 ms it would cost using `PerformanceCounter`/PDH.
 2. **No `System.Windows.Forms`, no `System.Drawing`** — the tray icon is a hand-rolled Win32 `Shell_NotifyIconW` wrapper, the icon is loaded via `ExtractIconEx` from the exe itself. This drops 20–30 MB of assemblies that WPF apps usually pull in.
 3. **No `System.Management`/WMI** — we replaced the only two WMI queries (CPU temp fallback, VRAM total) with cheaper alternatives.
-4. **Pooled buffers in the sparkline** — the `Point[]` array and gradient brushes are reused across renders. Zero per-frame heap allocations.
+4. **Pooled buffers in the sparkline** — the `Point[]` array and gradient brushes are reused across renders instead of being allocated every frame.
 5. **Lazy initialisation of LibreHardwareMonitor** — sensor enumeration happens in the background after the UI is already on screen.
 6. **Staggered polling** — fast metrics (CPU/RAM/Net/Disk) tick at 1 s, hardware sensors at 2 s, top processes at 5 s, drive list at 30 s. No one tick does too much.
 7. **ReadyToRun precompile** — managed IL is precompiled to native code at publish time (`-p:PublishReadyToRun=true`), shaving ~30% off the cold-start JIT cost.
@@ -63,14 +79,16 @@ A full performance log lives in `%TEMP%\pulse-perf.log`: any tick that exceeds 5
 
 ## Features
 
-- **CPU**: usage %, current clock (GHz), temperature, power (W) — see "Running as administrator" below
-- **RAM**: usage %, used/total GB, cached, committed, page file %
+- **CPU**: usage %, current clock (GHz), temperature, power (W) — see "Running as administrator" below; under the graph one bar per logical processor (threads of the same core side by side) and the load counted in full cores, to see how parallel the work is; as administrator the bars also show, in colour, how much of each core the busiest processes of *Top CPU* take (up to three, from half a core up)
+- **RAM**: usage %, used/total GB, available GB and, under the graph, the composition bar of Task Manager (in use, modified, cached, free); the tooltip explains each part and adds committed memory and page file usage
 - **GPU**: usage %, VRAM used/total, temperature, core/memory clocks, power (W)
 - **Network**: ↓/↑ throughput, Wi-Fi SSID/signal, local IP, public IP, ping to 8.8.8.8
 - **Disk**: total ↓/↑ throughput, per-drive free space + bar, SSD temp (when LHM Storage is enabled)
-- **Top processes**: top 6 by CPU and by RAM, updated every 5 s. Right-click on a process for: *Apri cartella file* · *Proprietà file* · *Termina processo* · *Cerca online*
+- **Top processes**: top 6 by CPU (those above half a core with their colour in the core bars, the load in cores in the tooltip) and by RAM, updated every 5 s. Right-click on a process for: *Open file location* · *Properties* · *End process* · *Search online*
 - **System**: uptime, estimated total PC power draw (W)
-- **Themed** with the Reticle UI (from v1.2.0): dark, light or follow Windows from the tray menu; accent colour, Mica transparency, fill and density from *Aspetto...*; smooth Bezier sparklines on a dotted grid, tabular digits so live values never shift the row, custom drag/resize, always-on-top toggle
+- **Fit button** in the header: the widget takes the smallest size that shows everything, with no scroll bar and no value cut, even at its longest
+- **Corner button** next to the pin: a click opens four arrows, and the chosen one sends the widget to that corner of its screen, 12 units from the edges and never over the taskbar
+- **Themed** with the Reticle UI (from v1.2.0): dark, light or follow Windows from the tray menu; accent colour, Mica transparency, fill and density from *Appearance...*; smooth Bezier sparklines on a dotted grid, tabular digits so live values never shift the row, custom drag/resize, always-on-top toggle
 
 ## Running as administrator (important)
 
@@ -79,6 +97,7 @@ A full performance log lives in `%TEMP%\pulse-perf.log`: any tick that exceeds 5
 - CPU temperature (per-core and package)
 - CPU package power (W)
 - Accurate per-core clock frequency
+- Which process runs on which core (the colours in the core bars): the kernel sampling session needs elevation too
 
 Everything else (CPU/RAM/GPU usage, GPU temp/power, network, disk, top processes) works fine without elevation — these don't need MSR access.
 
@@ -89,9 +108,15 @@ When you run `Setup-Pulse-vX.Y.Z.exe`, the wizard offers two startup options:
 - ☐ **Start with Windows** — registers `HKCU\…\Run` so Pulse launches on login (regular user privileges, no UAC prompt)
 - ☐ **Start with administrator privileges** ← *check this if you want CPU temp/power*
 
-The second checkbox creates a **Windows Scheduled Task** with trigger *On Logon* and *Run with highest privileges*. This is the standard workaround used by HWiNFO64, ThrottleStop, MSI Afterburner et al. to avoid the UAC prompt at every login. Once configured, Windows itself launches Pulse with an elevated token at boot — no clicking, no warnings.
+The second checkbox creates a **Windows Scheduled Task** with trigger *On Logon* and *Run with highest privileges*. This is the standard workaround used by HWiNFO64, ThrottleStop, MSI Afterburner et al. to avoid the UAC prompt at every login. Once configured, Windows itself launches Pulse with an elevated token at boot — no clicking, no warnings. The task has no run-time limit (the Task Scheduler default stopped Pulse after 72 hours) and starts on battery too.
 
-The Scheduled Task is removed when you uninstall Pulse.
+With *Install for me only*, the installer's default mode, Setup itself has no administrator rights, and Windows lets only an administrator create a task with the highest privileges: ticking the option then brings up one UAC prompt while installing (and one when uninstalling, to remove the task). *Install for all users* asks for it once at the start instead. Unticking the option in a later update removes the task, and Pulse goes back to starting without the rights.
+
+Pulse uses the same task when it is started without the rights: at the end of the installer (Windows runs *Launch Pulse* as a normal user), from the Start menu or from the desktop icon it starts the task and closes, and it is back elevated in about a second, again with no UAC prompt. So after installing or updating it has the administrator rights at once, not from the next logon.
+
+A third checkbox, ticked by default, **restarts Pulse if it closes because of an error**, with the same rights it normally starts with: a second Scheduled Task, *Pulse restart*, that fires on the crash event Windows writes for `Pulse.exe` (see [`docs/INSTALLER.md`](docs/INSTALLER.md)). The case it was made for: an NVIDIA driver update crashed an elevated Pulse, which stayed closed until it was reopened by hand, without the administrator rights.
+
+The Scheduled Tasks are removed when you uninstall Pulse.
 
 ### Why admin alone isn't always enough
 
@@ -99,7 +124,7 @@ Modern Windows 11 ships with **VBS** (Virtualization-Based Security) and **HVCI*
 
 If you have **AMD Ryzen Master** installed, its driver (`AMDRyzenMasterDriverV31.sys`) is loaded as a permanent Windows service and is signed by AMD, so it passes VBS without complaints. Pulse detects this driver and uses it — *no extra installation, no manual configuration*.
 
-If you have an **Intel CPU**, install HWiNFO64 (free for personal use). Its driver is signed via newer Microsoft attestation and bypasses VBS. Future Pulse versions will read directly from HWiNFO64's shared memory; for now the LHM library tries its own driver and may fall back to "n/a" under VBS.
+If you have an **Intel CPU**, for now Pulse relies on the LHM library's own driver, which may be blocked under VBS (CPU temp/power then show "n/a"). HWiNFO64 (free for personal use) has a driver signed via newer Microsoft attestation that passes VBS: future Pulse versions will read directly from HWiNFO64's shared memory, but today installing it doesn't change what Pulse shows.
 
 See [`docs/HARDWARE-SUPPORT.md`](docs/HARDWARE-SUPPORT.md) for the full breakdown per CPU family.
 
@@ -129,20 +154,20 @@ Optional, to unlock CPU temperature / power:
 | System | What you need | Works under VBS / HVCI |
 |---|---|---|
 | AMD Ryzen | Install [AMD Ryzen Master](https://www.amd.com/en/products/processors/ryzen-master.html) → its signed driver stays loaded as a Windows service | ✅ Yes |
-| Intel Core (Gen 8–14) | Install [HWiNFO64](https://www.hwinfo.com) (free for personal) | ✅ Yes |
+| Intel Core (Gen 8–14) | Nothing to install for now: LHM's own driver, with admin rights ([HWiNFO64](https://www.hwinfo.com) support is planned) | ⚠️ May be blocked |
 | No supported tool installed | CPU temp/power show as `n/a`, everything else still works | ✅ |
 
 ## Tray menu
 
 Right-click the tray icon (near the clock) for:
 
-- Mostra / Nascondi — toggle widget visibility
-- Tema — Scuro / Chiaro / Come Windows (dark, light, follow Windows)
-- Aspetto... — accent colour, transparency, fill and density, applied live
-- Sempre in primo piano — always-on-top pin toggle
-- Avvia con Windows — autostart (regular user privileges)
-- Riavvia come amministratore — re-launch elevated, enables MSR sensors (only shown when not already admin)
-- Esci
+- Show / Hide — toggle widget visibility
+- Theme — Dark / Light / Follow Windows
+- Appearance... — accent colour, transparency, fill and density, applied live
+- Always on top — pin toggle
+- Start with Windows — autostart (regular user privileges)
+- Restart as administrator — re-launch elevated, enables MSR sensors and the process colours in the core bars (only shown when not already admin)
+- Exit
 
 ## SmartScreen warning when downloading
 

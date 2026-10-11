@@ -29,7 +29,14 @@ public sealed partial class NetworkMonitor
         await Task.Run(() =>
         {
             UpdateLocalAdapter();
-            if (DateTime.UtcNow - _lastWifiCheck > TimeSpan.FromSeconds(8))
+            // nome della rete e segnale servono solo quando la connessione attiva è Wi-Fi: via cavo niente netsh (era un processo
+            // ogni 8 secondi, 31 ms di CPU ciascuno, per niente); in Wi-Fi ogni 30 secondi, il nome cambia di rado
+            if (AdapterType != "Wi-Fi")
+            {
+                Ssid = null;
+                SignalPercent = null;
+            }
+            else if (DateTime.UtcNow - _lastWifiCheck > TimeSpan.FromSeconds(30))
             {
                 _lastWifiCheck = DateTime.UtcNow;
                 UpdateWifi();

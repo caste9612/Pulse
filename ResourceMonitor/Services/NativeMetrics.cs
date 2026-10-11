@@ -39,6 +39,80 @@ public sealed class NativeMetrics
         return Math.Clamp((1.0 - (double)idleDelta / totalDelta) * 100.0, 0, 100);
     }
 
+    // ===== CPU PER CORE =====
+
+    // NtQuerySystemInformation con SystemProcessorPerformanceInformation (class 8): per ogni core logico del gruppo di processori
+    // (al massimo 64) uno struct da 48 byte con IdleTime (8), KernelTime (8, idle compreso), UserTime (8), ... Una chiamata per tutti.
+    private const int CorePerfSize = 48;
+    private readonly byte[] _coreBuf = new byte[64 * CorePerfSize];
+    private long[] _prevCoreIdle = Array.Empty<long>();
+    private long[] _prevCoreTotal = Array.Empty<long>();
+
+    /// <summary>CPU usage % di ogni core logico. Prima chiamata serve come baseline (ritorna zeri).</summary>
+    public double[] GetCoreLoads()
+    {
+        int returned;
+        var handle = GCHandle.Alloc(_coreBuf, GCHandleType.Pinned);
+        try
+        {
+            if (NtQuerySystemInformation(8, handle.AddrOfPinnedObject(), _coreBuf.Length, out returned) != 0) return Array.Empty<double>();
+        }
+        finally
+        {
+            handle.Free();
+        }
+
+        int count = returned / CorePerfSize;
+        var loads = new double[count];
+        bool primed = _prevCoreIdle.Length == count;
+        if (!primed) { _prevCoreIdle = new long[count]; _prevCoreTotal = new long[count]; }
+        for (int i = 0; i < count; i++)
+        {
+            int at = i * CorePerfSize;
+            long idle = BitConverter.ToInt64(_coreBuf, at);
+            long total = BitConverter.ToInt64(_coreBuf, at + 8) + BitConverter.ToInt64(_coreBuf, at + 16);
+            long totalDelta = total - _prevCoreTotal[i];
+            if (primed && totalDelta > 0)
+                loads[i] = Math.Clamp((1.0 - (double)(idle - _prevCoreIdle[i]) / totalDelta) * 100.0, 0, 100);
+            _prevCoreIdle[i] = idle; _prevCoreTotal[i] = total;
+        }
+        return loads;
+    }
+
+    /// <summary>Per ognuno dei primi <paramref name="count"/> core logici, il core fisico a cui appartiene: i thread SMT dello stesso
+    /// core hanno lo stesso numero. Dalla topologia di GetLogicalProcessorInformationEx, che non cambia: si legge una volta.
+    /// Se la lettura fallisce ogni core logico fa core a sé.</summary>
+    public static int[] GetPhysicalCores(int count)
+    {
+        var cores = new int[count];
+        for (int i = 0; i < count; i++) cores[i] = -1 - i;
+        int length = 0;
+        GetLogicalProcessorInformationEx(RelationProcessorCore, IntPtr.Zero, ref length);
+        if (length <= 0) return cores;
+        IntPtr buf = Marshal.AllocHGlobal(length);
+        try
+        {
+            if (!GetLogicalProcessorInformationEx(RelationProcessorCore, buf, ref length)) return cores;
+            // SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX: Relationship (4), Size (4), poi PROCESSOR_RELATIONSHIP con la GROUP_AFFINITY
+            // del core a +32: Mask (8 byte, un bit per core logico) e Group (a +40). Conta il gruppo 0: fino a 64 core logici è l'unico
+            for (int offset = 0, core = 0; offset < length; core++)
+            {
+                IntPtr entry = IntPtr.Add(buf, offset);
+                int size = Marshal.ReadInt32(entry, 4);
+                if (size <= 0) break;
+                ulong mask = (ulong)Marshal.ReadInt64(entry, 32);
+                if (Marshal.ReadInt16(entry, 40) == 0)
+                {
+                    for (int bit = 0; bit < count && bit < 64; bit++)
+                        if ((mask & (1UL << bit)) != 0) cores[bit] = core;
+                }
+                offset += size;
+            }
+        }
+        finally { Marshal.FreeHGlobal(buf); }
+        return cores;
+    }
+
     // ===== MEMORY =====
 
     public struct MemoryInfo
@@ -47,15 +121,23 @@ public sealed class NativeMetrics
         public double AvailableGb;
         public double UsedGb;
         public double UsedPercent;
-        public double CachedGb;
+        // la composizione della barra "Composizione memoria" di Gestione attività; NaN se Windows non dà le liste
+        public double InUseGb;
+        public double ModifiedGb;
+        public double StandbyGb;
+        public double FreeGb;
         public double CommittedGb;
         public double CommitLimitGb;
-        public double PageFilePercent;
+        public double PageFileUsedGb;
+        public double PageFileTotalGb;
     }
+
+    private readonly byte[] _memoryListBuf = new byte[176];
+    private readonly byte[] _pageFileBuf = new byte[4096];
 
     public MemoryInfo GetMemory()
     {
-        var info = new MemoryInfo();
+        var info = new MemoryInfo { InUseGb = double.NaN, ModifiedGb = double.NaN, StandbyGb = double.NaN, FreeGb = double.NaN };
 
         var ms = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
         if (GlobalMemoryStatusEx(ref ms))
@@ -64,19 +146,21 @@ public sealed class NativeMetrics
             info.AvailableGb = ms.ullAvailPhys / 1024d / 1024d / 1024d;
             info.UsedGb = info.TotalGb - info.AvailableGb;
             info.UsedPercent = ms.dwMemoryLoad;
+        }
 
-            double pageFileTotal = ms.ullTotalPageFile;
-            double pageFileAvail = ms.ullAvailPageFile;
-            if (pageFileTotal > 0)
-            {
-                // Pagefile usage = (totale page+phys - disponibile page+phys) - (totale phys - disp phys), divided by file portion
-                // Approssimazione: % use of page file = used_pf / total_pf
-                // total_pf reale = ullTotalPageFile - ullTotalPhys
-                double pagefileBytes = pageFileTotal - ms.ullTotalPhys;
-                double pagefileUsed = (pageFileTotal - pageFileAvail) - (ms.ullTotalPhys - ms.ullAvailPhys);
-                if (pagefileBytes > 0 && pagefileUsed > 0)
-                    info.PageFilePercent = Math.Clamp(pagefileUsed / pagefileBytes * 100, 0, 100);
-            }
+        double page = Environment.SystemPageSize / 1024d / 1024d / 1024d;
+
+        // liste della memoria (SystemMemoryListInformation, classe 80), in pagine: ZeroPageCount (0), FreePageCount (8),
+        // ModifiedPageCount (16), ModifiedNoWritePageCount (24), BadPageCount (32), PageCountByPriority[8] (40, lo standby).
+        // "In uso" è quello che resta, come in Gestione attività
+        if (info.TotalGb > 0 && Query(80, _memoryListBuf))
+        {
+            double standby = 0;
+            for (int i = 0; i < 8; i++) standby += BitConverter.ToUInt64(_memoryListBuf, 40 + 8 * i);
+            info.FreeGb = (BitConverter.ToUInt64(_memoryListBuf, 0) + BitConverter.ToUInt64(_memoryListBuf, 8)) * page;
+            info.ModifiedGb = (BitConverter.ToUInt64(_memoryListBuf, 16) + BitConverter.ToUInt64(_memoryListBuf, 24)) * page;
+            info.StandbyGb = standby * page;
+            info.InUseGb = Math.Max(0, info.TotalGb - info.FreeGb - info.ModifiedGb - info.StandbyGb);
         }
 
         if (GetPerformanceInfo(out var pi, Marshal.SizeOf<PERFORMANCE_INFORMATION>()))
@@ -84,10 +168,34 @@ public sealed class NativeMetrics
             double pageSize = pi.PageSize.ToInt64();
             info.CommittedGb = pi.CommitTotal.ToInt64() * pageSize / 1024d / 1024d / 1024d;
             info.CommitLimitGb = pi.CommitLimit.ToInt64() * pageSize / 1024d / 1024d / 1024d;
-            info.CachedGb = pi.SystemCache.ToInt64() * pageSize / 1024d / 1024d / 1024d;
+        }
+
+        // file di paging (SystemPageFileInformation, classe 18): uno struct per file con NextEntryOffset (0), TotalSize (4) e
+        // TotalInUse (8) in pagine. Prima l'uso si stimava come impegnata meno RAM usata, che superava il file e dava 100 %
+        if (Query(18, _pageFileBuf))
+        {
+            double total = 0, inUse = 0;
+            for (int offset = 0; offset + 12 <= _pageFileBuf.Length;)
+            {
+                total += BitConverter.ToUInt32(_pageFileBuf, offset + 4);
+                inUse += BitConverter.ToUInt32(_pageFileBuf, offset + 8);
+                int next = BitConverter.ToInt32(_pageFileBuf, offset);
+                if (next <= 0) break;
+                offset += next;
+            }
+            info.PageFileTotalGb = total * page;
+            info.PageFileUsedGb = inUse * page;
         }
 
         return info;
+    }
+
+    private static bool Query(int sysClass, byte[] buf)
+    {
+        Array.Clear(buf);
+        var handle = GCHandle.Alloc(buf, GCHandleType.Pinned);
+        try { return NtQuerySystemInformation(sysClass, handle.AddrOfPinnedObject(), buf.Length, out _) == 0; }
+        finally { handle.Free(); }
     }
 
     // ===== DISK =====
@@ -139,8 +247,14 @@ public sealed class NativeMetrics
 
     // ===== NETWORK =====
 
-    private long _prevNetRecv, _prevNetSent;
+    // contatori della lettura precedente, per interfaccia (InterfaceLuid): un'interfaccia che compare non porta un picco finto
+    private Dictionary<long, (ulong In, ulong Out)> _prevNet = new();
     private DateTime _prevNetSample = DateTime.MinValue;
+
+    // MIB_IF_ROW2 (netioapi.h) letta per posizioni: 1352 byte, Alias e Description in UTF-16 da 257 caratteri. La struttura
+    // dichiarata fino alla 1.2.0 contava le stringhe come ANSI (864 byte): righe e campi fuori posto, traffico sempre 0
+    private const int IfRowSize = 1352;
+    private const int IfRowLuid = 0, IfRowType = 1128, IfRowFlags = 1152, IfRowOperStatus = 1156, IfRowInOctets = 1208, IfRowOutOctets = 1280;
 
     public struct NetRates
     {
@@ -154,34 +268,45 @@ public sealed class NativeMetrics
         if (GetIfTable2(out IntPtr tablePtr) != 0 || tablePtr == IntPtr.Zero) return result;
         try
         {
-            int numEntries = Marshal.ReadInt32(tablePtr); // ULONG NumEntries
-            // Padding allineamento 8 byte poi array di MIB_IF_ROW2
-            int rowSize = Marshal.SizeOf<MIB_IF_ROW2>();
-            long recv = 0, sent = 0;
+            int numEntries = Marshal.ReadInt32(tablePtr); // ULONG NumEntries, poi le righe allineate a 8 byte
+            // si contano le schede fisiche attive (flag HardwareInterface): Windows mostra la stessa scheda anche come filtri (WFP,
+            // QoS) con gli stessi byte, e le schede virtuali (VPN, Hyper-V, ZeroTier) passano comunque da una fisica. Se un sistema
+            // non segnala nessuna scheda fisica, si contano tutte le interfacce che non sono filtri, come prima
+            var hardware = new Dictionary<long, (ulong In, ulong Out)>();
+            var notFilters = new Dictionary<long, (ulong In, ulong Out)>();
             for (int i = 0; i < numEntries; i++)
             {
-                IntPtr rowPtr = IntPtr.Add(tablePtr, 8 + i * rowSize);
-                var row = Marshal.PtrToStructure<MIB_IF_ROW2>(rowPtr);
-                // Filtra interfacce inattive / loopback / virtual
-                if (row.OperStatus != 1) continue; // IfOperStatusUp = 1
-                if (row.Type == 24) continue;       // IF_TYPE_SOFTWARE_LOOPBACK
-                if (row.Type == 131) continue;      // IF_TYPE_TUNNEL
-                recv += (long)row.InOctets;
-                sent += (long)row.OutOctets;
+                IntPtr row = IntPtr.Add(tablePtr, 8 + i * IfRowSize);
+                if (Marshal.ReadInt32(row, IfRowOperStatus) != 1) continue;   // IfOperStatusUp
+                int type = Marshal.ReadInt32(row, IfRowType);
+                if (type is 24 or 131) continue;                              // IF_TYPE_SOFTWARE_LOOPBACK, IF_TYPE_TUNNEL
+                byte flags = Marshal.ReadByte(row, IfRowFlags);                // InterfaceAndOperStatusFlags
+                var counters = ((ulong)Marshal.ReadInt64(row, IfRowInOctets), (ulong)Marshal.ReadInt64(row, IfRowOutOctets));
+                long luid = Marshal.ReadInt64(row, IfRowLuid);
+                if ((flags & 1) != 0) hardware[luid] = counters;               // HardwareInterface
+                if ((flags & 2) == 0) notFilters[luid] = counters;             // non FilterInterface
             }
+            var current = hardware.Count > 0 ? hardware : notFilters;
 
             var now = DateTime.UtcNow;
             if (_prevNetSample != DateTime.MinValue)
             {
                 double seconds = (now - _prevNetSample).TotalSeconds;
+                ulong recv = 0, sent = 0;
+                foreach (var (luid, c) in current)
+                {
+                    // solo le interfacce che c'erano anche prima; un contatore che riparte da zero non conta
+                    if (!_prevNet.TryGetValue(luid, out var p) || c.In < p.In || c.Out < p.Out) continue;
+                    recv += c.In - p.In;
+                    sent += c.Out - p.Out;
+                }
                 if (seconds > 0)
                 {
-                    result.ReceiveBytesPerSec = Math.Max(0, (recv - _prevNetRecv) / seconds);
-                    result.SendBytesPerSec = Math.Max(0, (sent - _prevNetSent) / seconds);
+                    result.ReceiveBytesPerSec = recv / seconds;
+                    result.SendBytesPerSec = sent / seconds;
                 }
             }
-            _prevNetRecv = recv;
-            _prevNetSent = sent;
+            _prevNet = current;
             _prevNetSample = now;
         }
         finally
@@ -267,59 +392,11 @@ public sealed class NativeMetrics
     [DllImport("ntdll.dll")]
     private static extern int NtQuerySystemInformation(int sysClass, IntPtr buf, int bufSize, out int returned);
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MIB_IF_ROW2
-    {
-        public ulong InterfaceLuid;
-        public uint InterfaceIndex;
-        public Guid InterfaceGuid;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 257)]
-        public string Alias;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 257)]
-        public string Description;
-        public uint PhysicalAddressLength;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
-        public byte[] PhysicalAddress;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
-        public byte[] PermanentPhysicalAddress;
-        public uint Mtu;
-        public uint Type;
-        public uint TunnelType;
-        public uint MediaType;
-        public uint PhysicalMediumType;
-        public uint AccessType;
-        public uint DirectionType;
-        public byte InterfaceAndOperStatusFlags;
-        public uint OperStatus;
-        public uint AdminStatus;
-        public uint MediaConnectState;
-        public Guid NetworkGuid;
-        public uint ConnectionType;
-        public ulong TransmitLinkSpeed;
-        public ulong ReceiveLinkSpeed;
-        public ulong InOctets;
-        public ulong InUcastPkts;
-        public ulong InNUcastPkts;
-        public ulong InDiscards;
-        public ulong InErrors;
-        public ulong InUnknownProtos;
-        public ulong InUcastOctets;
-        public ulong InMulticastOctets;
-        public ulong InBroadcastOctets;
-        public ulong OutOctets;
-        public ulong OutUcastPkts;
-        public ulong OutNUcastPkts;
-        public ulong OutDiscards;
-        public ulong OutErrors;
-        public ulong OutUcastOctets;
-        public ulong OutMulticastOctets;
-        public ulong OutBroadcastOctets;
-        public ulong InSpeed;
-        public ulong OutSpeed;
-        public uint InQueueLength;
-        public uint OutQLen;
-        public uint TransmitQueueLength;
-    }
+    private const int RelationProcessorCore = 0;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetLogicalProcessorInformationEx(int relationshipType, IntPtr buffer, ref int returnedLength);
 
     [DllImport("iphlpapi.dll")]
     private static extern int GetIfTable2(out IntPtr table);
