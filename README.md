@@ -94,7 +94,7 @@ When you run `Setup-Pulse-vX.Y.Z.exe`, the wizard offers two startup options:
 
 The second checkbox creates a **Windows Scheduled Task** with trigger *On Logon* and *Run with highest privileges*. This is the standard workaround used by HWiNFO64, ThrottleStop, MSI Afterburner et al. to avoid the UAC prompt at every login. Once configured, Windows itself launches Pulse with an elevated token at boot — no clicking, no warnings. The task has no run-time limit (the Task Scheduler default stopped Pulse after 72 hours) and starts on battery too.
 
-With *Install for me only*, the installer's default mode, Setup itself has no administrator rights, and Windows lets only an administrator create a task with the highest privileges: ticking the option then brings up one UAC prompt while installing (and one when uninstalling, to remove the task). *Install for all users* asks for it once at the start instead.
+With *Install for me only*, the installer's default mode, Setup itself has no administrator rights, and Windows lets only an administrator create a task with the highest privileges: ticking the option then brings up one UAC prompt while installing (and one when uninstalling, to remove the task). *Install for all users* asks for it once at the start instead. Unticking the option in a later update removes the task, and Pulse goes back to starting without the rights.
 
 Pulse uses the same task when it is started without the rights: at the end of the installer (Windows runs *Launch Pulse* as a normal user), from the Start menu or from the desktop icon it starts the task and closes, and it is back elevated in about a second, again with no UAC prompt. So after installing or updating it has the administrator rights at once, not from the next logon.
 

@@ -64,6 +64,12 @@ Now `register-task.ps1` catches the refusal (a `CimException` whose error code i
 
 Checked on test tasks from a non-elevated Windows PowerShell, as Setup runs the script: one UAC prompt registered both tasks with the highest privileges, another overwrote an elevated task with a non-elevated one, and the uninstaller's command deleted both with one prompt, where a non-elevated `schtasks /Delete` got *access denied*. Not checked: a real *for me only* install, since the installer is compiled only by CI.
 
+### Unticking an option in an update
+
+Inno Setup offers again the options of the previous install, but it only runs the entries of the ticked ones: until v1.3.0, unticking *Start with administrator privileges* or *Restart Pulse if it closes because of an error* left the task registered before, and Pulse kept starting elevated at logon (and, with the hand-off of v1.3.0, at every start) or kept coming back after a crash. Now `register-task.ps1 -Remove` takes away the task of each unticked option, in one call when both are unticked: nothing happens if the task isn't there, and a task registered elevated brings one UAC prompt when Setup isn't elevated, as above. The `Run` value of *Start with Windows* stays: the tray menu writes it too, and an update without that tick would remove an autostart set from there.
+
+Checked on test tasks from a non-elevated Windows PowerShell: removing tasks that aren't there and a non-elevated task needed no prompt (under a second each), two tasks registered elevated went with one prompt. Not checked: a real update.
+
 ## Restart after a crash
 
 On 10/10/2026 an NVIDIA driver update crashed a running Pulse four seconds later (a native access violation inside LibreHardwareMonitor's NVML call, which no .NET code can catch), and it stayed closed until it was reopened by hand, without the administrator rights. The *Restart Pulse if it closes because of an error* option registers a second task, **`Pulse restart`**, from `installer/task-crash.xml`:

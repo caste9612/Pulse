@@ -90,6 +90,20 @@ Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Template ""{tmp}\task-crash.xml"" -Name ""{#MyAppRestartTaskName}"" -Exe ""{app}\{#MyAppExeName}"" -RunLevel LeastPrivilege"; \
   Tasks: restart and not startup_admin; Flags: runhidden waituntilterminated
 
+; An option unticked in an update stops acting: the task an earlier install registered for it goes (register-task.ps1 -Remove:
+; nothing to do if it isn't there, one elevation if Windows refuses, as above). A leftover logon task would keep starting Pulse
+; elevated, at logon and through AdminStart at every other start. The Run value of "Start with Windows" is left alone: the tray
+; menu sets it too, and an update without that tick would take it away
+Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Remove -Name ""{#MyAppTaskName}"" -Name2 ""{#MyAppRestartTaskName}"""; \
+  Tasks: not startup_admin and not restart; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Remove -Name ""{#MyAppTaskName}"""; \
+  Tasks: not startup_admin and restart; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Remove -Name ""{#MyAppRestartTaskName}"""; \
+  Tasks: startup_admin and not restart; Flags: runhidden waituntilterminated
+
 ; Launch the app at end of install
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
