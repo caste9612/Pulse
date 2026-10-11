@@ -31,10 +31,10 @@ Pulse was built with obsessive focus on minimising its own footprint. After seve
 | **Handles** | ~850 | Stable, no leak |
 | **Threads** | ~20 | Stable |
 | **RAM growth over 2 min** | ~0 MB | No leaks measured |
-| **Single-file exe** | 7 MB (10.3 MB from v1.2.0) | + 1.5 MB of native LHM dependencies; v1.2.0 embeds the Reticle UI library and its fonts |
+| **Single-file exe** | 7 MB (10.3 MB in v1.2.0, 10.5 MB in v1.3.0) | + 1.5 MB of native LHM dependencies; v1.2.0 embeds the Reticle UI library and its fonts |
 | **Installer** | 4.4 MB | + portable zip 3.7 MB |
 
-The table was measured on v1.1.0. For v1.2.0 see below.
+The table was measured on v1.1.0. For v1.2.0 and v1.3.0 see below.
 
 ### v1.2.0: the Reticle UI
 
@@ -48,6 +48,22 @@ v1.2.0 moves the widget to Reticle, the author's WPF design system, and drops th
 | Dedicated video memory | 34 MB | **17 MB** |
 | Private memory / working set | 145 / 200 MB | 130 / 211 MB |
 | Cold start (message loop ready) | ~506 ms | ~540 ms |
+
+### v1.3.0: lighter sensors, Reticle 0.6
+
+v1.3.0 reads NVIDIA GPUs directly with NVML instead of LibreHardwareMonitor's 41 sensors (a sensor read went from 84 to 4.8 ms), reads only the GPU it shows, starts `netsh` only on Wi-Fi, and moves to Reticle 0.6, whose window no longer uses WPF's `WindowChrome`. Measured on 11/10/2026 with the PC idle, same 622 × 502 window, v1.2.0, the v1.2.0 code on Reticle 0.6 alone, and v1.3.0 alternated in two 45 s rounds (not elevated; v1.2.0 measured again in this session, so compare within this table only):
+
+| Metric | v1.2.0 | Reticle 0.6 alone | v1.3.0 |
+|---|---|---|---|
+| CPU, widget visible | 2.50% of one core | 2.72% | **2.10%** |
+| CPU, widget hidden in the tray | 2.65% | 2.55% | **1.53%** |
+| Compositor (dwm) CPU, widget visible | 6.6% | 4.1% | **2.5%** |
+| Compositor (dwm) GPU, widget visible | 1.67% | 0.60% | **0.57%** |
+| GPU (3D engine) of Pulse | 0.05% | 0.03% | 0.04% |
+| Private memory / working set | 130 / 211 MB | 130 / 209 MB | 131 / 214 MB |
+| Cold start (message loop ready) | ~590 ms | ~477 ms | ~510 ms |
+
+Hidden in the tray the widget draws nothing, so that row is the data collection alone: about one point of a core less, what NVML saves every two seconds. With the widget visible part of it goes to the new core and memory bars. The compositor rows are the noisiest (other windows on screen move them too), but they went down in both rounds: the window without `WindowChrome` costs Windows less.
 
 ### How we got here (the things that matter)
 
