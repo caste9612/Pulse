@@ -247,8 +247,14 @@ public sealed class NativeMetrics
 
     // ===== NETWORK =====
 
-    private long _prevNetRecv, _prevNetSent;
+    // contatori della lettura precedente, per interfaccia (InterfaceLuid): un'interfaccia che compare non porta un picco finto
+    private Dictionary<long, (ulong In, ulong Out)> _prevNet = new();
     private DateTime _prevNetSample = DateTime.MinValue;
+
+    // MIB_IF_ROW2 (netioapi.h) letta per posizioni: 1352 byte, Alias e Description in UTF-16 da 257 caratteri. La struttura
+    // dichiarata fino alla 1.2.0 contava le stringhe come ANSI (864 byte): righe e campi fuori posto, traffico sempre 0
+    private const int IfRowSize = 1352;
+    private const int IfRowLuid = 0, IfRowType = 1128, IfRowFlags = 1152, IfRowOperStatus = 1156, IfRowInOctets = 1208, IfRowOutOctets = 1280;
 
     public struct NetRates
     {
@@ -262,34 +268,45 @@ public sealed class NativeMetrics
         if (GetIfTable2(out IntPtr tablePtr) != 0 || tablePtr == IntPtr.Zero) return result;
         try
         {
-            int numEntries = Marshal.ReadInt32(tablePtr); // ULONG NumEntries
-            // Padding allineamento 8 byte poi array di MIB_IF_ROW2
-            int rowSize = Marshal.SizeOf<MIB_IF_ROW2>();
-            long recv = 0, sent = 0;
+            int numEntries = Marshal.ReadInt32(tablePtr); // ULONG NumEntries, poi le righe allineate a 8 byte
+            // si contano le schede fisiche attive (flag HardwareInterface): Windows mostra la stessa scheda anche come filtri (WFP,
+            // QoS) con gli stessi byte, e le schede virtuali (VPN, Hyper-V, ZeroTier) passano comunque da una fisica. Se un sistema
+            // non segnala nessuna scheda fisica, si contano tutte le interfacce che non sono filtri, come prima
+            var hardware = new Dictionary<long, (ulong In, ulong Out)>();
+            var notFilters = new Dictionary<long, (ulong In, ulong Out)>();
             for (int i = 0; i < numEntries; i++)
             {
-                IntPtr rowPtr = IntPtr.Add(tablePtr, 8 + i * rowSize);
-                var row = Marshal.PtrToStructure<MIB_IF_ROW2>(rowPtr);
-                // Filtra interfacce inattive / loopback / virtual
-                if (row.OperStatus != 1) continue; // IfOperStatusUp = 1
-                if (row.Type == 24) continue;       // IF_TYPE_SOFTWARE_LOOPBACK
-                if (row.Type == 131) continue;      // IF_TYPE_TUNNEL
-                recv += (long)row.InOctets;
-                sent += (long)row.OutOctets;
+                IntPtr row = IntPtr.Add(tablePtr, 8 + i * IfRowSize);
+                if (Marshal.ReadInt32(row, IfRowOperStatus) != 1) continue;   // IfOperStatusUp
+                int type = Marshal.ReadInt32(row, IfRowType);
+                if (type is 24 or 131) continue;                              // IF_TYPE_SOFTWARE_LOOPBACK, IF_TYPE_TUNNEL
+                byte flags = Marshal.ReadByte(row, IfRowFlags);                // InterfaceAndOperStatusFlags
+                var counters = ((ulong)Marshal.ReadInt64(row, IfRowInOctets), (ulong)Marshal.ReadInt64(row, IfRowOutOctets));
+                long luid = Marshal.ReadInt64(row, IfRowLuid);
+                if ((flags & 1) != 0) hardware[luid] = counters;               // HardwareInterface
+                if ((flags & 2) == 0) notFilters[luid] = counters;             // non FilterInterface
             }
+            var current = hardware.Count > 0 ? hardware : notFilters;
 
             var now = DateTime.UtcNow;
             if (_prevNetSample != DateTime.MinValue)
             {
                 double seconds = (now - _prevNetSample).TotalSeconds;
+                ulong recv = 0, sent = 0;
+                foreach (var (luid, c) in current)
+                {
+                    // solo le interfacce che c'erano anche prima; un contatore che riparte da zero non conta
+                    if (!_prevNet.TryGetValue(luid, out var p) || c.In < p.In || c.Out < p.Out) continue;
+                    recv += c.In - p.In;
+                    sent += c.Out - p.Out;
+                }
                 if (seconds > 0)
                 {
-                    result.ReceiveBytesPerSec = Math.Max(0, (recv - _prevNetRecv) / seconds);
-                    result.SendBytesPerSec = Math.Max(0, (sent - _prevNetSent) / seconds);
+                    result.ReceiveBytesPerSec = recv / seconds;
+                    result.SendBytesPerSec = sent / seconds;
                 }
             }
-            _prevNetRecv = recv;
-            _prevNetSent = sent;
+            _prevNet = current;
             _prevNetSample = now;
         }
         finally
@@ -380,60 +397,6 @@ public sealed class NativeMetrics
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetLogicalProcessorInformationEx(int relationshipType, IntPtr buffer, ref int returnedLength);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MIB_IF_ROW2
-    {
-        public ulong InterfaceLuid;
-        public uint InterfaceIndex;
-        public Guid InterfaceGuid;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 257)]
-        public string Alias;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 257)]
-        public string Description;
-        public uint PhysicalAddressLength;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
-        public byte[] PhysicalAddress;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
-        public byte[] PermanentPhysicalAddress;
-        public uint Mtu;
-        public uint Type;
-        public uint TunnelType;
-        public uint MediaType;
-        public uint PhysicalMediumType;
-        public uint AccessType;
-        public uint DirectionType;
-        public byte InterfaceAndOperStatusFlags;
-        public uint OperStatus;
-        public uint AdminStatus;
-        public uint MediaConnectState;
-        public Guid NetworkGuid;
-        public uint ConnectionType;
-        public ulong TransmitLinkSpeed;
-        public ulong ReceiveLinkSpeed;
-        public ulong InOctets;
-        public ulong InUcastPkts;
-        public ulong InNUcastPkts;
-        public ulong InDiscards;
-        public ulong InErrors;
-        public ulong InUnknownProtos;
-        public ulong InUcastOctets;
-        public ulong InMulticastOctets;
-        public ulong InBroadcastOctets;
-        public ulong OutOctets;
-        public ulong OutUcastPkts;
-        public ulong OutNUcastPkts;
-        public ulong OutDiscards;
-        public ulong OutErrors;
-        public ulong OutUcastOctets;
-        public ulong OutMulticastOctets;
-        public ulong OutBroadcastOctets;
-        public ulong InSpeed;
-        public ulong OutSpeed;
-        public uint InQueueLength;
-        public uint OutQLen;
-        public uint TransmitQueueLength;
-    }
 
     [DllImport("iphlpapi.dll")]
     private static extern int GetIfTable2(out IntPtr table);

@@ -61,7 +61,7 @@ Different metrics update at different rates to balance freshness vs CPU cost:
 | MetricsService | 1 s | ~5 ms | Direct Win32 calls through `NativeMetrics`; runs on the UI thread (`DispatcherTimer`) |
 | HardwareMonitor (LHM, NVML) | 2 s | ~5 ms with an NVIDIA GPU, ~80 ms through LHM alone | CPU sensors through LHM, the shown GPU through NVML when it's an NVIDIA (see below); background thread |
 | ProcessMonitor | 5 s | 50-200 ms | Process.GetProcesses is expensive; background thread |
-| NetworkMonitor | 2 s | <5 ms (ping) | Async ping to 8.8.8.8; adapter scan and `netsh` (every 8 s) on a background thread; public IP every 10 min |
+| NetworkMonitor | 2 s | <5 ms (ping) | Async ping to 8.8.8.8; adapter scan on a background thread, `netsh wlan` only when the active connection is Wi-Fi (every 30 s: until v1.2.0 every 8 s even on a cable, 31 ms of CPU each); public IP every 10 min |
 | DriveMonitor | 30 s | <5 ms | DriveInfo is fast; can stall on sleeping HDDs (background) |
 
 The 1 s tick is cheap enough to run on the UI thread. All slower work happens on `Task.Run` background threads, and the UI thread only does the final text/sparkline updates.

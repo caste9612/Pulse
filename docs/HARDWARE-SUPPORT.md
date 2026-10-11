@@ -19,8 +19,8 @@ Which sensors work on which hardware, and why some need extra software.
 | Disk I/O total | `NtQuerySystemInformation` (system-wide I/O byte counters) | nothing |
 | Disk per-drive free space | `DriveInfo.GetDrives` | nothing |
 | SSD temperature | LibreHardwareMonitorLib via SMART | **off by default**, see [Storage](#storage-ssd-temperature) |
-| Network I/O | `GetIfTable2` (interfaces that are up; loopback and tunnels excluded) | nothing |
-| Ping, IPs, Wi-Fi SSID | `Ping` to 8.8.8.8, `NetworkInterface`, `netsh wlan`, api.ipify.org for the public IP | Internet for ping and public IP |
+| Network I/O | `GetIfTable2`: the physical adapters that are up (Windows' *HardwareInterface* flag), because the same traffic shows up again on the WFP and QoS filter interfaces and on virtual adapters; if no adapter has the flag, every up interface that is not a filter (loopback and tunnels excluded) | nothing |
+| Ping, IPs, Wi-Fi SSID | `Ping` to 8.8.8.8, `NetworkInterface`, `netsh wlan` (only when the active connection is Wi-Fi, every 30 s), api.ipify.org for the public IP | Internet for ping and public IP |
 
 Disk I/O comes from the system-wide I/O byte counters: they count every read and write request, file cache hits included, not only what reaches the physical disks.
 
