@@ -73,15 +73,19 @@ Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup AND NOT startup_admin
 
 [Run]
-; Elevated Scheduled Task at logon if startup_admin selected (task-logon.xml: no 72-hour run limit, starts on battery too)
+; Scheduled Tasks from the templates (register-task.ps1). With "Install for me only" Setup has no administrator rights and
+; Windows refuses a task with the highest privileges, or overwriting one: the script then asks for elevation, once per call,
+; which is why the logon task and the restart task with the same rights are registered in one call.
+; Elevated logon task if startup_admin selected (task-logon.xml: no 72-hour run limit, starts on battery too), with the restart
+; after a crash (task-crash.xml) at the same level
+Filename: "powershell.exe"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Template ""{tmp}\task-logon.xml"" -Name ""{#MyAppTaskName}"" -Template2 ""{tmp}\task-crash.xml"" -Name2 ""{#MyAppRestartTaskName}"" -Exe ""{app}\{#MyAppExeName}"" -RunLevel HighestAvailable"; \
+  Tasks: startup_admin and restart; Flags: runhidden waituntilterminated
 Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Template ""{tmp}\task-logon.xml"" -Name ""{#MyAppTaskName}"" -Exe ""{app}\{#MyAppExeName}"" -RunLevel HighestAvailable"; \
-  Tasks: startup_admin; Flags: runhidden waituntilterminated
+  Tasks: startup_admin and not restart; Flags: runhidden waituntilterminated
 
-; Restart after a crash (task-crash.xml), with the rights Pulse normally starts with
-Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Template ""{tmp}\task-crash.xml"" -Name ""{#MyAppRestartTaskName}"" -Exe ""{app}\{#MyAppExeName}"" -RunLevel HighestAvailable"; \
-  Tasks: restart and startup_admin; Flags: runhidden waituntilterminated
+; Restart after a crash without startup_admin: with the rights Pulse normally starts with
 Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Template ""{tmp}\task-crash.xml"" -Name ""{#MyAppRestartTaskName}"" -Exe ""{app}\{#MyAppExeName}"" -RunLevel LeastPrivilege"; \
   Tasks: restart and not startup_admin; Flags: runhidden waituntilterminated
@@ -93,6 +97,11 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}
 ; Remove the Scheduled Tasks on uninstall (if they exist)
 Filename: "schtasks.exe"; Parameters: "/Delete /TN ""{#MyAppTaskName}"" /F"; Flags: runhidden; RunOnceId: "DelPulseTask"
 Filename: "schtasks.exe"; Parameters: "/Delete /TN ""{#MyAppRestartTaskName}"" /F"; Flags: runhidden; RunOnceId: "DelPulseRestartTask"
+; With "Install for me only" the uninstaller has no administrator rights either, and Windows refuses to delete the tasks
+; registered elevated (access denied): one elevation for both. Tasks and Check are evaluated when Setup records the entry, so it
+; is there only for such installs with startup_admin
+Filename: "{cmd}"; Parameters: "/c schtasks /Delete /TN ""{#MyAppTaskName}"" /F & schtasks /Delete /TN ""{#MyAppRestartTaskName}"" /F"; \
+  Verb: "runas"; Tasks: startup_admin; Check: not IsAdminInstallMode; Flags: shellexec runhidden waituntilterminated; RunOnceId: "DelPulseTasksElevated"
 
 [Code]
 // Check if .NET 9 Desktop Runtime is installed

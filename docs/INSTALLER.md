@@ -5,7 +5,7 @@ What `Setup-Pulse-vX.Y.Z.exe` does and how it works.
 ## User experience
 
 1. Double-click `Setup-Pulse-vX.Y.Z.exe`
-2. Before the wizard: the .NET 9 Desktop Runtime check (see below), the install mode (*for me only*, the default: no UAC, installs into `%LocalAppData%\Programs\Pulse`; or *for all users*, see below) in English only
+2. Before the wizard: the .NET 9 Desktop Runtime check (see below), the install mode (*for me only*, the default: no UAC unless *Start with administrator privileges* is ticked, installs into `%LocalAppData%\Programs\Pulse`; or *for all users*, see below) in English only
 3. Accept license (MIT)
 4. Choose options:
    - ☐ Start with Windows (regular user privileges)
@@ -21,7 +21,7 @@ Uninstall via Settings → Apps removes the program, the shortcuts, the autostar
 
 ## Per-user vs system-wide
 
-Default: **per-user install** (no UAC).
+Default: **per-user install** (no UAC, unless *Start with administrator privileges* is ticked: see [below](#for-me-only-and-the-administrator-option)).
 
 - Files go to `%LocalAppData%\Programs\Pulse\`
 - Shortcuts in user Start Menu
@@ -50,11 +50,19 @@ The task comes from the template `installer/task-logon.xml`, registered by `inst
 ```inno
 [Run]
 Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Template ""{tmp}\task-logon.xml"" -Name ""{#MyAppTaskName}"" -Exe ""{app}\{#MyAppExeName}"" -RunLevel HighestAvailable"; \
-  Tasks: startup_admin; Flags: runhidden waituntilterminated
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Template ""{tmp}\task-logon.xml"" -Name ""{#MyAppTaskName}"" -Template2 ""{tmp}\task-crash.xml"" -Name2 ""{#MyAppRestartTaskName}"" -Exe ""{app}\{#MyAppExeName}"" -RunLevel HighestAvailable"; \
+  Tasks: startup_admin and restart; Flags: runhidden waituntilterminated
 ```
 
-The script and the templates go to `{tmp}` and are deleted after setup. Reinstalling over an older version replaces the task (`-Force`). Removed on uninstall via `[UninstallRun]` calling `schtasks /Delete`.
+With the restart option (see [below](#restart-after-a-crash)) the same call registers the restart task at the same level; without it, a second entry registers the logon task alone. The script and the templates go to `{tmp}` and are deleted after setup. Reinstalling over an older version replaces the tasks (`-Force`). Removed on uninstall via `[UninstallRun]` calling `schtasks /Delete`.
+
+### For me only and the administrator option
+
+Windows lets only an elevated process create a task with the highest privileges, overwrite a task registered elevated, or delete one: a non-elevated attempt gets *access denied*. With *Install for all users* Setup is elevated and that's all. With *Install for me only*, the default, it isn't, and until v1.3.0 ticking *Start with administrator privileges* created nothing: the refusal went unnoticed (the `ScheduledTasks` cmdlets ignore the script's `$ErrorActionPreference`), so there was no logon task and no restart task either.
+
+Now `register-task.ps1` catches the refusal (a `CimException` whose error code is `E_ACCESSDENIED`, 0x80070005) and starts itself again elevated, with one UAC prompt for both tasks of the call; it passes the installing user's SID (`-User`), so the tasks stay that user's even if another account confirms the prompt. Declining the prompt leaves no task: that's the user's choice. The uninstaller of such an install has a third `[UninstallRun]` entry, recorded only for *for me only* installs with the option (`Tasks: startup_admin; Check: not IsAdminInstallMode`, evaluated when Setup records it): one elevated `cmd /c schtasks /Delete … & schtasks /Delete …` for both tasks.
+
+Checked on test tasks from a non-elevated Windows PowerShell, as Setup runs the script: one UAC prompt registered both tasks with the highest privileges, another overwrote an elevated task with a non-elevated one, and the uninstaller's command deleted both with one prompt, where a non-elevated `schtasks /Delete` got *access denied*. Not checked: a real *for me only* install, since the installer is compiled only by CI.
 
 ## Restart after a crash
 
