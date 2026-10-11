@@ -91,4 +91,27 @@ public static class SettingsService
             return true;
         }
     }
+
+    /// <summary>Un passaggio al task "Pulse" da amministratore (AdminStart) è ammesso se l'ultimo è di almeno un minuto prima, e in
+    /// quel caso lo si annota: se il task facesse ripartire un Pulse ancora senza diritti, quello non ci ripasserebbe in tondo. Se
+    /// il file non si può scrivere non si passa: meglio un Pulse senza diritti che uno che rimbalza.</summary>
+    public static bool AllowAdminHandOff()
+    {
+        var path = Path.Combine(NewDir, "admin-start.txt");
+        try
+        {
+            var now = DateTime.UtcNow;
+            if (File.Exists(path) &&
+                DateTime.TryParse(File.ReadAllText(path).Trim(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var last) &&
+                now - last < TimeSpan.FromMinutes(1) && last <= now)
+                return false;
+            Directory.CreateDirectory(NewDir);
+            File.WriteAllText(path, now.ToString("O", CultureInfo.InvariantCulture));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }

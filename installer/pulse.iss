@@ -7,6 +7,7 @@
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Pulse Contributors"
 #define MyAppExeName "Pulse.exe"
+; Pulse looks up the logon task by this name too (TaskName in ResourceMonitor/Services/AdminStart.cs): change both together
 #define MyAppTaskName "Pulse"
 #define MyAppRestartTaskName "Pulse restart"
 

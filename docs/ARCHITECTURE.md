@@ -158,9 +158,22 @@ WPF doesn't include a `NotifyIcon`. Three ways to get one:
 
 ## Single instance
 
-A named mutex `Pulse.SingleInstance` is created at startup (`ResourceMonitor.SingleInstance` before v1.1.0). If already taken, the second launch silently exits, so a build started while another Pulse is running doesn't start: close the other one first. It exits without touching the mutex: until v1.2.0 `OnExit` released it anyway, and the second Pulse crashed on its way out (a crash the restart task below would have restarted forever).
+A named mutex `Pulse.SingleInstance` is created at startup (`ResourceMonitor.SingleInstance` before v1.1.0). If already taken, the second launch silently exits, so a build started while another Pulse is running doesn't start: close the other one first. It exits without touching the mutex: until v1.2.0 `OnExit` released it anyway, and the second Pulse crashed on its way out (a crash the restart task below would have restarted forever). If Windows denies a Pulse without the rights access to the mutex of an elevated one, that too means a Pulse is running.
 
 The exceptions are the restarts, whose previous process may still be on its way out: with `--restart` (after a display driver change, or *Restart as administrator*, which before could see the old Pulse still running and quit) or `--after-crash` (from the restart task) the new Pulse waits up to 10 s for the mutex.
+
+## Starting elevated
+
+With *Start with administrator privileges* the installer registers the `Pulse` logon task with the highest privileges (`docs/INSTALLER.md`): Windows starts it elevated at logon, without a UAC prompt. Every other start is a normal user's: *Launch Pulse* at the end of the installer (Inno Setup runs it as the user who started the setup, unelevated even from an elevated setup), the Start menu, the desktop icon. Until v1.3.0 Pulse then ran without the rights until the next logon.
+
+`Services/AdminStart.cs` closes that gap. A Pulse started with no arguments, by an administrator whose token is the UAC-limited one, reads the task through the Task Scheduler COM API (`Schedule.Service`). If the task is enabled, runs with the highest privileges, belongs to the same user and starts this very `Pulse.exe`, Pulse releases the single-instance mutex, runs the task, waits up to 10 s for the elevated Pulse to take the mutex and exits. In every other case it carries on unelevated, as before:
+
+- no task, a disabled one, or one that starts another exe (a portable copy, a test build);
+- a standard user or UAC turned off, where the task would start an unelevated Pulse anyway;
+- any COM error;
+- no elevated Pulse within 10 s: the first one takes the mutex back.
+
+`SettingsService.AllowAdminHandOff` allows one hand-off a minute (`%APPDATA%\Pulse\admin-start.txt`), so a task that started an unelevated Pulse could not bounce forever. Restarts (`--restart`, `--after-crash`) and `--appearance` never hand off: they already have their rights, and a task can't pass arguments. `PULSE_NO_ADMIN_START=1` turns it off. A hand-off, a task that exists but is not used, or one that brings no elevated Pulse leaves a line in `%TEMP%\pulse-perf.log`.
 
 ## Staying up
 

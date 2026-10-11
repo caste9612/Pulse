@@ -94,6 +94,8 @@ When you run `Setup-Pulse-vX.Y.Z.exe`, the wizard offers two startup options:
 
 The second checkbox creates a **Windows Scheduled Task** with trigger *On Logon* and *Run with highest privileges*. This is the standard workaround used by HWiNFO64, ThrottleStop, MSI Afterburner et al. to avoid the UAC prompt at every login. Once configured, Windows itself launches Pulse with an elevated token at boot — no clicking, no warnings. The task has no run-time limit (the Task Scheduler default stopped Pulse after 72 hours) and starts on battery too.
 
+Pulse uses the same task when it is started without the rights: at the end of the installer (Windows runs *Launch Pulse* as a normal user), from the Start menu or from the desktop icon it starts the task and closes, and it is back elevated in about a second, again with no UAC prompt. So after installing or updating it has the administrator rights at once, not from the next logon.
+
 A third checkbox, ticked by default, **restarts Pulse if it closes because of an error**, with the same rights it normally starts with: a second Scheduled Task, *Pulse restart*, that fires on the crash event Windows writes for `Pulse.exe` (see [`docs/INSTALLER.md`](docs/INSTALLER.md)). The case it was made for: an NVIDIA driver update crashed an elevated Pulse, which stayed closed until it was reopened by hand, without the administrator rights.
 
 The Scheduled Tasks are removed when you uninstall Pulse.

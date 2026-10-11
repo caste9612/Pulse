@@ -31,6 +31,9 @@ public partial class App : Application
     private const string RestartArg = "--restart";
     private const string AfterCrashArg = "--after-crash";
 
+    // l'istanza unica: un solo Pulse per sessione (docs/ARCHITECTURE.md, "Single instance")
+    private const string InstanceName = "Pulse.SingleInstance";
+
     // Pulse è solo in inglese: anche i numeri (punto decimale) e le parole che WPF e Reticle prendono dalla cultura
     private static readonly System.Globalization.CultureInfo English = System.Globalization.CultureInfo.GetCultureInfo("en-US");
 
@@ -45,8 +48,8 @@ public partial class App : Application
         base.OnStartup(e);
 
         bool afterCrash = Array.IndexOf(e.Args, AfterCrashArg) >= 0;
-        _singleInstance = new Mutex(true, "Pulse.SingleInstance", out bool isNew);
-        if (!isNew && (afterCrash || Array.IndexOf(e.Args, RestartArg) >= 0))
+        bool isNew = TakeInstance();
+        if (!isNew && _singleInstance is not null && (afterCrash || Array.IndexOf(e.Args, RestartArg) >= 0))
         {
             // ripartenza (cambio del driver video, elevazione, crash): il processo di prima può essere ancora in uscita
             try { isNew = _singleInstance.WaitOne(TimeSpan.FromSeconds(10)); }
@@ -55,9 +58,8 @@ public partial class App : Application
         if (!isNew)
         {
             // c'è già un Pulse: si esce senza toccare l'istanza unica, che non è nostra. Prima OnExit la rilasciava lo stesso e il
-            // secondo Pulse andava in crash all'uscita, un crash che il task "Pulse riavvio" avrebbe fatto ripartire all'infinito
-            _singleInstance.Dispose();
-            _singleInstance = null;
+            // secondo Pulse andava in crash all'uscita, un crash che il task "Pulse restart" avrebbe fatto ripartire all'infinito
+            LeaveInstance();
             Shutdown();
             return;
         }
@@ -65,9 +67,17 @@ public partial class App : Application
         {
             // tre ripartenze dopo un crash in dieci minuti: Pulse va in crash appena parte, meglio fermarsi
             PerfLog.Note("crash restart refused: already 3 in the last 10 minutes");
-            _singleInstance.ReleaseMutex();
-            _singleInstance.Dispose();
-            _singleInstance = null;
+            ReleaseInstance();
+            Shutdown();
+            return;
+        }
+
+        // partito senza diritti ma con il task "Pulse" da amministratore scelto all'installazione: si riparte da lì, senza UAC. Se
+        // il Pulse elevato non compare si resta questo, senza diritti, come prima (Services/AdminStart.cs)
+        var handOff = AdminStart.TryHandOff(e.Args, ReleaseInstance, InstanceName);
+        if (handOff == AdminStart.Result.HandedOff || (handOff == AdminStart.Result.Failed && !TakeInstance()))
+        {
+            LeaveInstance();
             Shutdown();
             return;
         }
@@ -91,6 +101,37 @@ public partial class App : Application
 
         BuildTrayIcon();
         if (Array.IndexOf(e.Args, "--appearance") >= 0 || Array.IndexOf(e.Args, "--aspetto") >= 0) ShowAppearance();
+    }
+
+    // prende l'istanza unica: false se c'è già un Pulse. Il mutex di un Pulse elevato può negare l'accesso a un Pulse senza
+    // diritti, e anche questo vuol dire che c'è
+    private bool TakeInstance()
+    {
+        try
+        {
+            _singleInstance = new Mutex(true, InstanceName, out bool isNew);
+            return isNew;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            _singleInstance = null;
+            return false;
+        }
+    }
+
+    // libera l'istanza unica, che è di questo processo
+    private void ReleaseInstance()
+    {
+        _singleInstance?.ReleaseMutex();
+        _singleInstance?.Dispose();
+        _singleInstance = null;
+    }
+
+    // chiude il riferimento all'istanza unica senza rilasciarla: non è di questo processo
+    private void LeaveInstance()
+    {
+        _singleInstance?.Dispose();
+        _singleInstance = null;
     }
 
     private Views.AppearanceWindow? _appearance;
@@ -254,9 +295,7 @@ public partial class App : Application
         _tray?.Dispose();
         _metrics?.Dispose();
         _window?.Close();
-        _singleInstance?.ReleaseMutex();
-        _singleInstance?.Dispose();
-        _singleInstance = null;
+        ReleaseInstance();
         try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, RestartArg) { UseShellExecute = false }); }
         catch (Exception ex) { PerfLog.Note($"restart failed: {ex.Message}"); }
         Shutdown();
@@ -264,8 +303,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _singleInstance?.ReleaseMutex();
-        _singleInstance?.Dispose();
+        ReleaseInstance();
         base.OnExit(e);
     }
 }

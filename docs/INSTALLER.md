@@ -13,7 +13,7 @@ What `Setup-Pulse-vX.Y.Z.exe` does and how it works.
    - ☑ **Restart Pulse if it closes because of an error** (ticked by default; a second Scheduled Task, see [Restart after a crash](#restart-after-a-crash))
    - ☐ Create desktop shortcut
 5. Click Install → files copied
-6. Optionally launches Pulse at end of install
+6. Optionally launches Pulse at end of install (as a normal user; with *Start with administrator privileges* Pulse then goes through its task and comes back elevated, see below)
 
 With both startup options ticked, only the Scheduled Task is created: the `Run` value is written for *Start with Windows* alone.
 
@@ -42,6 +42,8 @@ The **Scheduled Task with `RunLevel = Highest`** workaround:
 4. Setting: `Run with highest privileges` ✅
 
 Result: at every Windows login, Windows itself launches Pulse with admin token, no UAC. This is the standard trick used by HWiNFO64, ThrottleStop, MSI Afterburner, and others.
+
+Every other start is a normal user's: *Launch Pulse* at the end of the installer (Inno Setup runs it as the user who started the setup, unelevated even from an elevated setup), the Start menu, the desktop icon. From v1.3.0 Pulse uses the task for those too: started without the rights, it runs the `Pulse` task and closes, and the elevated Pulse is up in about a second, still with no UAC prompt (*Starting elevated* in `docs/ARCHITECTURE.md`). So after an install or an update Pulse has its administrator rights at once, not from the next logon. The task name `Pulse` (`MyAppTaskName`) is also a constant in `Services/AdminStart.cs`: change both together.
 
 The task comes from the template `installer/task-logon.xml`, registered by `installer/register-task.ps1` (Windows PowerShell, `Register-ScheduledTask`), which fills in the exe path, the installing user and the run level. Until v1.2.0 it was a `schtasks /Create /SC ONLOGON /RL HIGHEST` and inherited the Task Scheduler defaults: stop the task after **72 hours** (so Pulse disappeared after three days without a logoff), don't start on battery, stop when the laptop is unplugged. The template sets no time limit (`ExecutionTimeLimit` `PT0S`) and keeps running on battery:
 
