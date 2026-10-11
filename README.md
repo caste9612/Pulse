@@ -70,6 +70,7 @@ A full performance log lives in `%TEMP%\pulse-perf.log`: any tick that exceeds 5
 - **Disk**: total ↓/↑ throughput, per-drive free space + bar, SSD temp (when LHM Storage is enabled)
 - **Top processes**: top 6 by CPU (those above half a core with their colour in the core bars, the load in cores in the tooltip) and by RAM, updated every 5 s. Right-click on a process for: *Apri cartella file* · *Proprietà file* · *Termina processo* · *Cerca online*
 - **System**: uptime, estimated total PC power draw (W)
+- **Fit button** in the header: the widget takes the smallest size that shows everything, with no scroll bar and no value cut, even at its longest
 - **Corner button** next to the pin: a click opens four arrows, and the chosen one sends the widget to that corner of its screen, 12 units from the edges and never over the taskbar
 - **Themed** with the Reticle UI (from v1.2.0): dark, light or follow Windows from the tray menu; accent colour, Mica transparency, fill and density from *Aspetto...*; smooth Bezier sparklines on a dotted grid, tabular digits so live values never shift the row, custom drag/resize, always-on-top toggle
 

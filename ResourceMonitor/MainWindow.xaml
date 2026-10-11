@@ -131,7 +131,11 @@
             <Border x:Name="DragHandle" Grid.Row="0" Height="32" Background="Transparent" Padding="12,0,4,0"
                     MouseLeftButtonDown="DragHandle_MouseLeftButtonDown">
                 <DockPanel LastChildFill="True">
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel x:Name="HeaderButtons" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- adatta: due righe e una doppia freccia tra le due, il widget prende la misura del contenuto (FitToContent) -->
+                        <Button x:Name="FitButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
+                                rt:Rt.Icon="M3,2.5 H13 M3,13.5 H13 M8,5 V11 M6,7 L8,5 L10,7 M6,9 L8,11 L10,9"
+                                ToolTip="Adatta la misura al contenuto" Click="FitButton_Click"/>
                         <!-- le quattro tacche d'angolo di Reticle: apre la scelta dell'angolo (CornerPicker) -->
                         <Button x:Name="CornerButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
                                 rt:Rt.Icon="M2.5,6.5 V2.5 H6.5 M9.5,2.5 H13.5 V6.5 M13.5,9.5 V13.5 H9.5 M6.5,13.5 H2.5 V9.5"
@@ -142,7 +146,7 @@
                         <Button x:Name="HideButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
                                 rt:Rt.Icon="M3,8 H13" ToolTip="Nascondi (resta in tray)" Click="HideButton_Click"/>
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel x:Name="HeaderInfo" Orientation="Horizontal" VerticalAlignment="Center">
                         <Path Width="16" Height="16" VerticalAlignment="Center"
                               Stroke="{DynamicResource Reticle.Brush.Accent}" StrokeThickness="1.6"
                               StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
@@ -155,8 +159,8 @@
                 </DockPanel>
             </Border>
 
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,2">
-                <StackPanel Margin="12,4,12,12">
+            <ScrollViewer x:Name="ContentScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,2">
+                <StackPanel x:Name="ContentPanel" Margin="12,4,12,12">
 
                     <!-- CPU -->
                     <Grid>
@@ -296,7 +300,7 @@
                     <rt:Ruler Margin="0,8,0,8"/>
 
                     <!-- TOP PROCESSES: due Panel con la legenda sulla cornice -->
-                    <Grid>
+                    <Grid x:Name="TopPanels">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="*"/>

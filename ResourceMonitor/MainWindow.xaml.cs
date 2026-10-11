@@ -265,9 +265,10 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         return string.Join("\n", lines);
     }
 
-    private string BuildUptime()
+    private string BuildUptime() => FormatUptime(DateTime.Now - _machineBoot);
+
+    private static string FormatUptime(TimeSpan up)
     {
-        var up = DateTime.Now - _machineBoot;
         if (up.TotalDays >= 1) return $"uptime {(int)up.TotalDays}g {up.Hours}h {up.Minutes}m";
         if (up.TotalHours >= 1) return $"uptime {up.Hours}h {up.Minutes}m";
         return $"uptime {up.Minutes}m";
@@ -555,6 +556,110 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         int x = right ? work.Right - (rect.Right - rect.Left) - pad : work.Left + pad;
         int y = bottom ? work.Bottom - (rect.Bottom - rect.Top) - pad : work.Top + pad;
         SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    // larghezze minime dei grafici quando il widget si adatta al contenuto: sparkline e barre restano leggibili
+    private const double FitGraphWidth = 96, FitDriveBarWidth = 60;
+
+    private void FitButton_Click(object sender, RoutedEventArgs e) => FitToContent();
+
+    // la misura minima che mostra tutto, presa dal layout vero: in altezza esattamente il contenuto (niente barra di scorrimento,
+    // niente spazio in fondo), in larghezza la più stretta in cui nessun valore è tagliato, nemmeno quando arriva al suo testo più
+    // lungo, con i grafici alla loro larghezza minima. Le righe di Top CPU e Top RAM non contano: i nomi si accorciano con i puntini
+    // per costruzione. Il widget resta attaccato al bordo destro o inferiore dello schermo se ci stava, e comunque dentro l'area di
+    // lavoro. L'elenco dei dischi arriva qualche secondo dopo l'avvio (un disco che dorme): adattare prima lo lascerebbe fuori
+    private void FitToContent()
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var before)) return;
+        var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        bool haveWork = GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), ref info);
+        int near = (int)Math.Round(2 * CornerPadding * GetDpiForWindow(hwnd) / 96.0);
+        bool right = haveWork && info.rcWork.Right - before.Right <= near;
+        bool bottom = haveWork && info.rcWork.Bottom - before.Bottom <= near;
+
+        // 1. l'altezza alla larghezza di adesso: dopo, la barra di scorrimento non c'è più e non ruba larghezza al calcolo
+        FitHeight();
+
+        // 2. la larghezza naturale di ogni riga con i grafici fermi al minimo: misurate senza limite di larghezza, le colonne * fanno
+        // come le Auto e i grafici valgono la larghezza data qui solo per la misura (Width, non MinWidth: la barra dei dischi di
+        // Reticle, senza limite, chiede più del minimo)
+        var graphs = Graphs().ToList();
+        foreach (var (element, min) in graphs) element.Width = min;
+        // i valori che crescono si misurano col loro testo più lungo: una misura presa a traffico basso o subito dopo l'avvio non
+        // taglia niente quando arrivano i MB/s o i giorni di uptime. Un valore che su questo PC non c'è (vuoto) resta vuoto
+        double fast = 999.9 * 1024 * 1024;
+        var widest = new (System.Windows.Controls.TextBlock Block, string Text)[]
+        {
+            (CpuValue, $"{100.0:0.0}%"), (RamValue, "100%"), (GpuValue, "100%"),
+            (NetValue, $"↓ {Fmt(fast)}  ↑ {Fmt(fast)}"), (DiskValue, $"↓ {Fmt(fast)}  ↑ {Fmt(fast)}"),
+            (NetPing, "ping 999 ms"), (UptimeText, FormatUptime(new TimeSpan(99, 23, 59, 0))), (PowerText, "PC ~999 W"),
+            (CpuPower, $"{999.9:0.0}W"), (CpuTemp, "100°C"), (GpuTemp, "100°C"), (DiskTemp, "100°C")
+        };
+        var shown = widest.Select(w => w.Block.Text).ToArray();
+        for (int i = 0; i < widest.Length; i++)
+            if (!string.IsNullOrEmpty(shown[i])) widest[i].Block.Text = widest[i].Text;
+        var unlimited = new Size(double.PositiveInfinity, double.PositiveInfinity);
+        double rows = 0;
+        foreach (UIElement child in ContentPanel.Children)
+        {
+            if (child == TopPanels) continue;
+            child.Measure(unlimited);
+            rows = Math.Max(rows, child.DesiredSize.Width);
+        }
+        HeaderInfo.Measure(unlimited);
+        HeaderButtons.Measure(unlimited);
+        foreach (var (element, _) in graphs) element.ClearValue(WidthProperty);
+        for (int i = 0; i < widest.Length; i++) widest[i].Block.Text = shown[i];
+        double header = HeaderInfo.DesiredSize.Width + HeaderButtons.DesiredSize.Width + DragHandle.Padding.Left + DragHandle.Padding.Right;
+        // a ciascuna si aggiunge quello che la finestra ha intorno: cornice e margini per il contenuto (dalla larghezza del pannello
+        // che scorre, che comprende la barra: WPF la toglie un passaggio dopo), cornice per l'intestazione
+        double around = ActualWidth - ContentScroll.ActualWidth + ContentPanel.Margin.Left + ContentPanel.Margin.Right;
+        double width = Math.Max(rows + around, header + ActualWidth - DragHandle.ActualWidth);
+        Width = Math.Max(MinWidth, Math.Ceiling(width));
+        FitHeight();
+
+        // 3. al bordo a cui era attaccato, e dentro l'area di lavoro
+        if (!haveWork || !GetWindowRect(hwnd, out var after)) return;
+        int w = after.Right - after.Left, h = after.Bottom - after.Top;
+        int x = right ? before.Right - w : after.Left;
+        int y = bottom ? before.Bottom - h : after.Top;
+        x = Math.Max(info.rcWork.Left, Math.Min(x, info.rcWork.Right - w));
+        y = Math.Max(info.rcWork.Top, Math.Min(y, info.rcWork.Bottom - h));
+        if (x != after.Left || y != after.Top)
+            SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    // l'altezza esatta del contenuto: quanto manca o avanza nel pannello che scorre; un pixel in più se l'arrotondamento lascia la barra
+    private void FitHeight()
+    {
+        UpdateLayout();
+        Height = Math.Max(MinHeight, Math.Ceiling(ActualHeight - ContentScroll.ViewportHeight + ContentScroll.ExtentHeight));
+        UpdateLayout();
+        for (int i = 0; i < 3 && ContentScroll.ExtentHeight > ContentScroll.ViewportHeight; i++)
+        {
+            Height += 1;
+            UpdateLayout();
+        }
+    }
+
+    // i grafici, che si accorciano quando il widget si stringe, con la larghezza minima che conservano adattando la misura
+    private IEnumerable<(FrameworkElement Element, double Min)> Graphs()
+    {
+        foreach (var graph in new FrameworkElement[] { CpuSpark, RamSpark, GpuSpark, NetSpark, DiskSpark, CoreBars, RamBar })
+            yield return (graph, FitGraphWidth);
+        foreach (var bar in Descendants<System.Windows.Controls.ProgressBar>(DriveList))
+            yield return (bar, FitDriveBarWidth);
+    }
+
+    private static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) yield return match;
+            foreach (var deeper in Descendants<T>(child)) yield return deeper;
+        }
     }
 
     private void HideButton_Click(object sender, RoutedEventArgs e)
