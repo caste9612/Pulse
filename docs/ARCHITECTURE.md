@@ -133,16 +133,16 @@ Window state lives in a single JSON file at `%APPDATA%\Pulse\settings.json` (on 
 
 Saved on `LocationChanged`, `SizeChanged`, on close, when the widget is hidden or shown, and on toggle of tray menu options.
 
-The appearance (theme, accent, transparency, fill, density) is saved by Reticle in `%LOCALAPPDATA%\Pulse\reticle-theme.json` (see below). *Avvia con Windows* writes the `Pulse` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+The appearance (theme, accent, transparency, fill, density) is saved by Reticle in `%LOCALAPPDATA%\Pulse\reticle-theme.json` (see below). *Start with Windows* writes the `Pulse` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 ## UI: Reticle
 
 From v1.2.0 the widget is built on Reticle, the author's WPF design system (v0.6.0, as the two DLLs in `lib/Reticle`, updated with `scripts/update-reticle.ps1`):
 
 - `App.xaml` merges `ReticleTheme` (the app defaults: dark, green accent, Mica, compact) and `ReticleControls`; `App.OnStartup` loads the user's choices with `ThemeManager.Current.Initialize(new JsonThemeSettingsStore("Pulse"))`, i.e. `%LOCALAPPDATA%\Pulse\reticle-theme.json`.
-- `MainWindow` is a `ReticleWindow` without caption bar (`ShowCaption="False"`) that hosts a `TickBorder` frame: the widget pattern of Reticle. No `AllowsTransparency`, no `DropShadowEffect`: the transparency is the Windows 11 backdrop (Mica by default, Acrylic or opaque from *Aspetto...*), composed by DWM instead of copied back from the GPU on every update.
+- `MainWindow` is a `ReticleWindow` without caption bar (`ShowCaption="False"`) that hosts a `TickBorder` frame: the widget pattern of Reticle. No `AllowsTransparency`, no `DropShadowEffect`: the transparency is the Windows 11 backdrop (Mica by default, Acrylic or opaque from *Appearance...*), composed by DWM instead of copied back from the GPU on every update.
 - Since Reticle 0.6.0 there is no WPF `WindowChrome` either: `ReticleWindow` answers `WM_NCCALCSIZE` (the whole window is client area) and `WM_NCHITTEST` (6-unit resize borders) itself. With `ShowCaption="False"` its drag area is 0 high, so dragging the header and double-clicking it stay Pulse's own handlers.
-- The tray menu switches the theme (*Tema*); *Aspetto...* opens Reticle's `AppearanceSettingsView`. Every change is applied live and saved.
+- The tray menu switches the theme (*Theme*); *Appearance...* opens Reticle's `AppearanceSettingsView`, whose texts are Italian only (Reticle has no English yet). Every change is applied live and saved.
 - Series colours: CPU, GPU, NET and DSK use the theme tones (info, success, warning, danger); RAM violet and temperature amber are fixed categories, with darker shades on the light theme (`MainWindow.UpdateSeriesBrushes`).
 - Reticle's animations and timers run only while the widget is on screen. Pulse's own polling keeps running while the widget is hidden in the tray, so the values are current when it comes back: hidden costs less CPU than visible, not zero (see the v1.2.0 figures in the README).
 
@@ -160,14 +160,14 @@ WPF doesn't include a `NotifyIcon`. Three ways to get one:
 
 A named mutex `Pulse.SingleInstance` is created at startup (`ResourceMonitor.SingleInstance` before v1.1.0). If already taken, the second launch silently exits, so a build started while another Pulse is running doesn't start: close the other one first. It exits without touching the mutex: until v1.2.0 `OnExit` released it anyway, and the second Pulse crashed on its way out (a crash the restart task below would have restarted forever).
 
-The exceptions are the restarts, whose previous process may still be on its way out: with `--riavvio` (after a display driver change, or *Riavvia come amministratore*, which before could see the old Pulse still running and quit) or `--dopo-crash` (from the restart task) the new Pulse waits up to 10 s for the mutex.
+The exceptions are the restarts, whose previous process may still be on its way out: with `--restart` (after a display driver change, or *Restart as administrator*, which before could see the old Pulse still running and quit) or `--after-crash` (from the restart task) the new Pulse waits up to 10 s for the mutex.
 
 ## Staying up
 
 Two things closed Pulse for good before v1.3.0, and both now bring it back:
 
-- **A display driver change.** `Services/GpuWatch.cs` registers for display adapter arrival and removal with `CM_Register_Notification` (no window, nothing to do until it fires). On the first notice `HardwareMonitor.Pause()` stops every sensor read, also between two hardware items of a running update, because an NVML call with the old driver's handle crashes the process (a native access violation .NET can't catch: what happened on 10/10/2026, four seconds after an NVIDIA driver update). Five seconds after the last notice Pulse restarts itself: `App.RestartAfterGpuChange` saves the window, closes the tray icon and the metrics (the core sampling session too), releases the mutex and starts `Pulse.exe --riavvio`, which inherits the same token, so an elevated Pulse stays elevated. LibreHardwareMonitor is not closed: closing it would call into NVML too. A new process is also simpler and safer than reopening NVML inside the old one, which would keep the `nvml.dll` it loaded with the old driver.
-- **A crash.** The installer's `Pulse riavvio` task (see `docs/INSTALLER.md`) starts `Pulse.exe --dopo-crash` ten seconds after Windows logs the crash; `SettingsService.AllowCrashRestart` keeps the last restarts in `%APPDATA%\Pulse\riavvii-dopo-crash.txt` and refuses a fourth one within ten minutes.
+- **A display driver change.** `Services/GpuWatch.cs` registers for display adapter arrival and removal with `CM_Register_Notification` (no window, nothing to do until it fires). On the first notice `HardwareMonitor.Pause()` stops every sensor read, also between two hardware items of a running update, because an NVML call with the old driver's handle crashes the process (a native access violation .NET can't catch: what happened on 10/10/2026, four seconds after an NVIDIA driver update). Five seconds after the last notice Pulse restarts itself: `App.RestartAfterGpuChange` saves the window, closes the tray icon and the metrics (the core sampling session too), releases the mutex and starts `Pulse.exe --restart`, which inherits the same token, so an elevated Pulse stays elevated. LibreHardwareMonitor is not closed: closing it would call into NVML too. A new process is also simpler and safer than reopening NVML inside the old one, which would keep the `nvml.dll` it loaded with the old driver.
+- **A crash.** The installer's `Pulse restart` task (see `docs/INSTALLER.md`) starts `Pulse.exe --after-crash` ten seconds after Windows logs the crash; `SettingsService.AllowCrashRestart` keeps the last restarts in `%APPDATA%\Pulse\crash-restarts.txt` and refuses a fourth one within ten minutes.
 
 Both were checked on test builds with a simulated driver change and a deliberate crash: the restarted Pulse came back in 0.7 s and in 11 s, at the same place on screen; four crashes in a row gave three restarts and a refusal.
 

@@ -26,13 +26,22 @@ public partial class App : Application
     private readonly object _gpuLock = new();
     private bool _restarting;
 
-    // ripartenze: dopo un cambio del driver video o un "Riavvia come amministratore" (RestartArg), dal task "Pulse riavvio"
-    // dopo un crash (AfterCrashArg). In entrambi i casi si aspetta che il processo di prima liberi l'istanza unica
-    private const string RestartArg = "--riavvio";
-    private const string AfterCrashArg = "--dopo-crash";
+    // ripartenze: dopo un cambio del driver video o un "Restart as administrator" (RestartArg), dal task "Pulse restart" dopo un
+    // crash (AfterCrashArg). In entrambi i casi si aspetta che il processo di prima liberi l'istanza unica
+    private const string RestartArg = "--restart";
+    private const string AfterCrashArg = "--after-crash";
+
+    // Pulse è solo in inglese: anche i numeri (punto decimale) e le parole che WPF e Reticle prendono dalla cultura
+    private static readonly System.Globalization.CultureInfo English = System.Globalization.CultureInfo.GetCultureInfo("en-US");
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        System.Globalization.CultureInfo.DefaultThreadCurrentCulture = English;
+        System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = English;
+        System.Globalization.CultureInfo.CurrentCulture = English;
+        System.Globalization.CultureInfo.CurrentUICulture = English;
+        FrameworkElement.LanguageProperty.OverrideMetadata(typeof(FrameworkElement),
+            new FrameworkPropertyMetadata(System.Windows.Markup.XmlLanguage.GetLanguage(English.IetfLanguageTag)));
         base.OnStartup(e);
 
         bool afterCrash = Array.IndexOf(e.Args, AfterCrashArg) >= 0;
@@ -81,7 +90,7 @@ public partial class App : Application
             _window.Show();
 
         BuildTrayIcon();
-        if (Array.IndexOf(e.Args, "--aspetto") >= 0) ShowAppearance();
+        if (Array.IndexOf(e.Args, "--appearance") >= 0 || Array.IndexOf(e.Args, "--aspetto") >= 0) ShowAppearance();
     }
 
     private Views.AppearanceWindow? _appearance;
@@ -105,12 +114,12 @@ public partial class App : Application
 
     private void PopulateMenu(ContextMenu menu)
     {
-        var showItem = new MenuItem { Header = "Mostra / Nascondi" };
+        var showItem = new MenuItem { Header = "Show / Hide" };
         showItem.Click += (_, _) => _window?.ToggleVisible();
 
         _pinItem = new MenuItem
         {
-            Header = "Sempre in primo piano",
+            Header = "Always on top",
             IsCheckable = true,
             IsChecked = _settings?.Topmost ?? true
         };
@@ -127,7 +136,7 @@ public partial class App : Application
 
         _autoStartItem = new MenuItem
         {
-            Header = "Avvia con Windows",
+            Header = "Start with Windows",
             IsCheckable = true,
             IsChecked = AutoStart.IsEnabled()
         };
@@ -137,12 +146,12 @@ public partial class App : Application
             if (_settings != null) { _settings.AutoStart = _autoStartItem.IsChecked; SettingsService.Save(_settings); }
         };
 
-        var appearanceItem = new MenuItem { Header = "Aspetto..." };
+        var appearanceItem = new MenuItem { Header = "Appearance..." };
         appearanceItem.Click += (_, _) => ShowAppearance();
 
-        // tema scuro, chiaro o come Windows, a un clic dal tray; resta salvato con le altre impostazioni Aspetto
-        var themeItem = new MenuItem { Header = "Tema" };
-        var themes = new[] { ("Scuro", Reticle.Wpf.ThemeVariant.Dark), ("Chiaro", Reticle.Wpf.ThemeVariant.Light), ("Come Windows", Reticle.Wpf.ThemeVariant.System) };
+        // tema scuro, chiaro o come Windows, a un clic dal tray; resta salvato con le altre impostazioni di Appearance
+        var themeItem = new MenuItem { Header = "Theme" };
+        var themes = new[] { ("Dark", Reticle.Wpf.ThemeVariant.Dark), ("Light", Reticle.Wpf.ThemeVariant.Light), ("Follow Windows", Reticle.Wpf.ThemeVariant.System) };
         foreach (var (label, variant) in themes)
         {
             var item = new MenuItem { Header = label, IsCheckable = true, IsChecked = Reticle.Wpf.ThemeManager.Current.Settings.Theme == variant };
@@ -166,15 +175,15 @@ public partial class App : Application
             menu.Items.Add(new Separator());
             var adminItem = new MenuItem
             {
-                Header = "Riavvia come amministratore",
-                ToolTip = "Abilita lettura temp/watt CPU (registri MSR)"
+                Header = "Restart as administrator",
+                ToolTip = "Enables CPU temperature and power (MSR registers) and the process colours in the core bars"
             };
             adminItem.Click += (_, _) => RestartAsAdmin();
             menu.Items.Add(adminItem);
         }
 
         menu.Items.Add(new Separator());
-        var exitItem = new MenuItem { Header = "Esci" };
+        var exitItem = new MenuItem { Header = "Exit" };
         exitItem.Click += (_, _) => ExitApp();
         menu.Items.Add(exitItem);
     }

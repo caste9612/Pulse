@@ -62,11 +62,11 @@ public static class SettingsService
         catch { }
     }
 
-    /// <summary>Una ripartenza dopo un crash (dal task "Pulse riavvio") è ammessa se nei dieci minuti prima ce ne sono state meno
+    /// <summary>Una ripartenza dopo un crash (dal task "Pulse restart") è ammessa se nei dieci minuti prima ce ne sono state meno
     /// di tre, e in quel caso la si annota: un Pulse che va in crash appena parte non riparte all'infinito.</summary>
     public static bool AllowCrashRestart()
     {
-        var path = Path.Combine(NewDir, "riavvii-dopo-crash.txt");
+        var path = Path.Combine(NewDir, "crash-restarts.txt");
         try
         {
             var now = DateTime.UtcNow;

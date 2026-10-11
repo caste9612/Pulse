@@ -8,7 +8,7 @@
 #define MyAppPublisher "Pulse Contributors"
 #define MyAppExeName "Pulse.exe"
 #define MyAppTaskName "Pulse"
-#define MyAppRestartTaskName "Pulse riavvio"
+#define MyAppRestartTaskName "Pulse restart"
 
 [Setup]
 AppId={{A8D7E0B0-3F4C-4D6E-9A2B-1C3D5E6F7A8B}
@@ -35,15 +35,9 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 MinVersion=10.0.17763
 
 [Languages]
-Name: "italian"; MessagesFile: "compiler:Languages\Italian.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [CustomMessages]
-italian.StartupTask=Avvia all'avvio di Windows (utente normale)
-italian.StartupAdminTask=Avvia con privilegi amministratore (per temp/watt CPU su sistemi supportati)
-italian.RestartTask=Riavvia Pulse se si chiude per un errore
-italian.DesktopIconTask=Crea collegamento sul desktop
-italian.OptionsGroup=Opzioni di installazione:
 english.StartupTask=Start with Windows (normal user)
 english.StartupAdminTask=Start with administrator privileges (for CPU temp/watt on supported systems)
 english.RestartTask=Restart Pulse if it closes because of an error

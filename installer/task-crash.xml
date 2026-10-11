@@ -1,11 +1,11 @@
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <!-- Pulse di nuovo in piedi se si chiude per un errore: parte quando il registro Applicazione riceve l'evento 1000
        ("Application Error") dell'exe di Pulse, che Windows scrive anche con Windows Error Reporting spento. Dieci secondi di
-       attesa, poi Pulse con l'argomento dopo-crash: aspetta che il processo di prima sia uscito e rifiuta la quarta ripartenza
+       attesa, poi Pulse con l'argomento after-crash: aspetta che il processo di prima sia uscito e rifiuta la quarta ripartenza
        in dieci minuti. I diritti sono quelli con cui Pulse parte di solito: amministratore se c'è il task di accesso elevato.
        I nomi dei segnaposto non vanno nei commenti: register-task.ps1 li sostituirebbe anche qui -->
   <RegistrationInfo>
-    <Description>Riavvia Pulse se si chiude per un errore, con gli stessi diritti con cui parte di solito.</Description>
+    <Description>Restarts Pulse if it closes because of an error, with the rights it normally starts with.</Description>
   </RegistrationInfo>
   <Triggers>
     <EventTrigger>
@@ -30,7 +30,7 @@
   <Actions Context="Author">
     <Exec>
       <Command>PULSE_EXE</Command>
-      <Arguments>--dopo-crash</Arguments>
+      <Arguments>--after-crash</Arguments>
     </Exec>
   </Actions>
 </Task>

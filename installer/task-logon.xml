@@ -4,7 +4,7 @@
        con schtasks: nessun limite di durata (il valore predefinito, 72 ore, chiudeva Pulse dopo tre giorni accesi) e avvio
        anche a batteria -->
   <RegistrationInfo>
-    <Description>Avvia Pulse all'accesso con i diritti di amministratore (temperatura e watt della CPU, colori dei processi nei core).</Description>
+    <Description>Starts Pulse at logon with administrator rights (CPU temperature and power, process colours in the core bars).</Description>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>

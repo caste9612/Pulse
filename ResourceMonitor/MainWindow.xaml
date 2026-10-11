@@ -65,12 +65,12 @@
 
         <ContextMenu x:Key="ProcessMenu" x:Shared="False"
                      DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
-            <MenuItem Header="Apri cartella file" Click="ProcOpenFolder_Click" CommandParameter="{Binding}"/>
-            <MenuItem Header="Propriet&#224; file" Click="ProcProperties_Click" CommandParameter="{Binding}"/>
+            <MenuItem Header="Open file location" Click="ProcOpenFolder_Click" CommandParameter="{Binding}"/>
+            <MenuItem Header="Properties" Click="ProcProperties_Click" CommandParameter="{Binding}"/>
             <Separator/>
-            <MenuItem Header="Termina processo" Click="ProcKill_Click" CommandParameter="{Binding}"/>
+            <MenuItem Header="End process" Click="ProcKill_Click" CommandParameter="{Binding}"/>
             <Separator/>
-            <MenuItem Header="Cerca online" Click="ProcSearch_Click" CommandParameter="{Binding}"/>
+            <MenuItem Header="Search online" Click="ProcSearch_Click" CommandParameter="{Binding}"/>
         </ContextMenu>
         <DataTemplate x:Key="ProcessRowTemplate">
             <Grid Margin="0,1,0,1" Background="Transparent" ContextMenu="{StaticResource ProcessMenu}">
@@ -135,16 +135,16 @@
                         <!-- adatta: due righe e una doppia freccia tra le due, il widget prende la misura del contenuto (FitToContent) -->
                         <Button x:Name="FitButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
                                 rt:Rt.Icon="M3,2.5 H13 M3,13.5 H13 M8,5 V11 M6,7 L8,5 L10,7 M6,9 L8,11 L10,9"
-                                ToolTip="Adatta la misura al contenuto" Click="FitButton_Click"/>
+                                ToolTip="Fit the size to the content" Click="FitButton_Click"/>
                         <!-- le quattro tacche d'angolo di Reticle: apre la scelta dell'angolo (CornerPicker) -->
                         <Button x:Name="CornerButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
                                 rt:Rt.Icon="M2.5,6.5 V2.5 H6.5 M9.5,2.5 H13.5 V6.5 M13.5,9.5 V13.5 H9.5 M6.5,13.5 H2.5 V9.5"
-                                ToolTip="Sposta in un angolo dello schermo" Click="CornerButton_Click"/>
+                                ToolTip="Move to a corner of the screen" Click="CornerButton_Click"/>
                         <Button x:Name="PinButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
                                 rt:Rt.Icon="M5.5,1.5 H10.5 M6.5,1.5 V6.5 L4.5,9.5 H11.5 L9.5,6.5 V1.5 M8,9.5 V14.5"
-                                ToolTip="Sempre in primo piano (clicca per togglare)" Click="PinButton_Click"/>
+                                ToolTip="Always on top (click to toggle)" Click="PinButton_Click"/>
                         <Button x:Name="HideButton" Style="{StaticResource Reticle.Button.Icon}" Height="28"
-                                rt:Rt.Icon="M3,8 H13" ToolTip="Nascondi (resta in tray)" Click="HideButton_Click"/>
+                                rt:Rt.Icon="M3,8 H13" ToolTip="Hide (stays in the tray)" Click="HideButton_Click"/>
                     </StackPanel>
                     <StackPanel x:Name="HeaderInfo" Orientation="Horizontal" VerticalAlignment="Center">
                         <Path Width="16" Height="16" VerticalAlignment="Center"
@@ -154,7 +154,7 @@
                         <rt:TrackedText Text="Pulse" Style="{StaticResource Reticle.Tracked.Legend}" Margin="8,0,0,0" VerticalAlignment="Center"/>
                         <TextBlock x:Name="UptimeText" Style="{StaticResource InfoText}" Margin="14,0,0,0"/>
                         <TextBlock x:Name="PowerText" Style="{StaticResource InfoText}" Foreground="{DynamicResource TempBrush}" Margin="14,0,0,0"
-                                   ToolTip="Consumo PC totale stimato (CPU + GPU + baseline ~30W)"/>
+                                   ToolTip="Estimated total PC power (CPU + GPU + about 30 W for the rest)"/>
                     </StackPanel>
                 </DockPanel>
             </Border>
@@ -337,13 +337,13 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <Button x:Name="CornerTopLeft" Tag="TopLeft" Style="{StaticResource Reticle.Button.Icon}" Height="28"
-                            rt:Rt.Icon="M4.5,10 V4.5 H10 M4.5,4.5 L12.5,12.5" ToolTip="In alto a sinistra" Click="CornerArrow_Click"/>
+                            rt:Rt.Icon="M4.5,10 V4.5 H10 M4.5,4.5 L12.5,12.5" ToolTip="Top left" Click="CornerArrow_Click"/>
                     <Button x:Name="CornerTopRight" Grid.Column="1" Tag="TopRight" Style="{StaticResource Reticle.Button.Icon}" Height="28"
-                            rt:Rt.Icon="M6,4.5 H11.5 V10 M11.5,4.5 L3.5,12.5" ToolTip="In alto a destra" Click="CornerArrow_Click"/>
+                            rt:Rt.Icon="M6,4.5 H11.5 V10 M11.5,4.5 L3.5,12.5" ToolTip="Top right" Click="CornerArrow_Click"/>
                     <Button x:Name="CornerBottomLeft" Grid.Row="1" Tag="BottomLeft" Style="{StaticResource Reticle.Button.Icon}" Height="28"
-                            rt:Rt.Icon="M4.5,6 V11.5 H10 M4.5,11.5 L12.5,3.5" ToolTip="In basso a sinistra" Click="CornerArrow_Click"/>
+                            rt:Rt.Icon="M4.5,6 V11.5 H10 M4.5,11.5 L12.5,3.5" ToolTip="Bottom left" Click="CornerArrow_Click"/>
                     <Button x:Name="CornerBottomRight" Grid.Row="1" Grid.Column="1" Tag="BottomRight" Style="{StaticResource Reticle.Button.Icon}" Height="28"
-                            rt:Rt.Icon="M11.5,6 V11.5 H6 M11.5,11.5 L3.5,3.5" ToolTip="In basso a destra" Click="CornerArrow_Click"/>
+                            rt:Rt.Icon="M11.5,6 V11.5 H6 M11.5,11.5 L3.5,3.5" ToolTip="Bottom right" Click="CornerArrow_Click"/>
                 </Grid>
             </rt:TickBorder>
         </Grid>

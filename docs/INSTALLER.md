@@ -5,7 +5,7 @@ What `Setup-Pulse-vX.Y.Z.exe` does and how it works.
 ## User experience
 
 1. Double-click `Setup-Pulse-vX.Y.Z.exe`
-2. Before the wizard: the .NET 9 Desktop Runtime check (see below), the install mode (*for me only*, the default: no UAC, installs into `%LocalAppData%\Programs\Pulse`; or *for all users*, see below) and the language (English / Italian)
+2. Before the wizard: the .NET 9 Desktop Runtime check (see below), the install mode (*for me only*, the default: no UAC, installs into `%LocalAppData%\Programs\Pulse`; or *for all users*, see below) in English only
 3. Accept license (MIT)
 4. Choose options:
    - ☐ Start with Windows (regular user privileges)
@@ -56,10 +56,10 @@ The script and the templates go to `{tmp}` and are deleted after setup. Reinstal
 
 ## Restart after a crash
 
-On 10/10/2026 an NVIDIA driver update crashed a running Pulse four seconds later (a native access violation inside LibreHardwareMonitor's NVML call, which no .NET code can catch), and it stayed closed until it was reopened by hand, without the administrator rights. The *Restart Pulse if it closes because of an error* option registers a second task, **`Pulse riavvio`**, from `installer/task-crash.xml`:
+On 10/10/2026 an NVIDIA driver update crashed a running Pulse four seconds later (a native access violation inside LibreHardwareMonitor's NVML call, which no .NET code can catch), and it stayed closed until it was reopened by hand, without the administrator rights. The *Restart Pulse if it closes because of an error* option registers a second task, **`Pulse restart`**, from `installer/task-crash.xml`:
 
 - Trigger: the event Windows writes in the Application log when a program crashes, *Application Error* 1000, filtered on `Pulse.exe`, then a 10-second delay. Windows writes it even with Windows Error Reporting turned off.
-- Action: `Pulse.exe --dopo-crash`. Pulse waits for the crashed process to be gone (single-instance mutex) and refuses a fourth restart within ten minutes, so a Pulse that crashes as soon as it starts doesn't loop: the refusal is noted in `%TEMP%\pulse-perf.log`.
+- Action: `Pulse.exe --after-crash`. Pulse waits for the crashed process to be gone (single-instance mutex) and refuses a fourth restart within ten minutes, so a Pulse that crashes as soon as it starts doesn't loop: the refusal is noted in `%TEMP%\pulse-perf.log`.
 - Run level: `HighestAvailable` when *Start with administrator privileges* is ticked, `LeastPrivilege` otherwise, so Pulse comes back with the rights it normally has.
 
 Closing Pulse from the tray, or ending it from Task Manager, writes no crash event and restarts nothing. Two simpler mechanisms were tried and don't do this: the task setting *If the task fails, restart every…* only covers a task that fails to start, not a program that crashes later, and `RegisterApplicationRestart` relies on Windows Error Reporting, which is turned off on some machines (the reference PC among them).
@@ -100,15 +100,12 @@ To remove the SmartScreen warning, the installer needs to be signed with an EV (
 
 ## Localization
 
-The Inno Setup script includes Italian + English language files:
+Pulse is in English only, and so is the installer: one language in the Inno Setup script.
 
 ```inno
 [Languages]
-Name: "italian"; MessagesFile: "compiler:Languages\Italian.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 ```
-
-Wizard auto-detects from OS, user can override at first dialog.
 
 ## Building locally
 

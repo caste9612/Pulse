@@ -7,7 +7,7 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <!-- default dell'app, pattern Widget di Reticle: trasparenza Mica, che su un widget sempre in primo piano costa meno di Acrylic,
-                     densità compatta; l'utente li cambia dal menu di tray (Tema, "Aspetto...") -->
+                     densità compatta; l'utente li cambia dal menu di tray (Theme, "Appearance...") -->
                 <rt:ReticleTheme Theme="Dark" Accent="verde" Transparency="Low" Fill="Translucent" Density="Compact" />
                 <rt:ReticleControls />
             </ResourceDictionary.MergedDictionaries>

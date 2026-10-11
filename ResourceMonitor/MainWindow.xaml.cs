@@ -161,7 +161,7 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             CpuValue.Text = $"{_metrics.Cpu:0.0}%";
             CoreBars.Values = _metrics.CpuCores;
             CoreBars.Shares = _metrics.CpuCoreShares;
-            CpuCoresText.Text = _metrics.CpuCores.Length > 0 ? $"≈ {_metrics.CpuCoresInUse:0.0} core in uso" : "";
+            CpuCoresText.Text = _metrics.CpuCores.Length > 0 ? $"≈ {_metrics.CpuCoresInUse:0.0} cores in use" : "";
             RamValue.Text = $"{_metrics.RamUsedPercent:0}%";
             RamUsed.Text = $"{_metrics.RamUsedGb:0.0} / {_metrics.RamTotalGb:0.0} GB";
             GpuValue.Text = $"{_metrics.Gpu:0}%";
@@ -176,7 +176,7 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             NetSpark.Values = _metrics.NetHistory.ToArray();
             DiskSpark.Values = _metrics.DiskHistory.ToArray();
 
-            RamAvailableText.Text = $"{_metrics.RamAvailableGb:0.0} GB disponibili";
+            RamAvailableText.Text = $"{_metrics.RamAvailableGb:0.0} GB available";
             RamBar.Parts = double.IsNaN(_metrics.RamInUseGb)
                 ? new[] { _metrics.RamUsedGb, 0, 0, _metrics.RamAvailableGb }   // senza le liste della memoria: usata e disponibile
                 : new[] { _metrics.RamInUseGb, _metrics.RamModifiedGb, _metrics.RamStandbyGb, _metrics.RamFreeGb };
@@ -189,16 +189,16 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
     {
         int logical = _metrics.CpuCorePhysical.Length;
         int physical = _metrics.CpuCorePhysical.Distinct().Count();
-        var cores = physical < logical ? $"core logici ({logical}, su {physical} core fisici)" : $"core ({logical})";
-        var bars = physical < logical ? "una barra per core logico, attaccate quelle dello stesso core fisico" : "una barra per core";
+        var cores = physical < logical ? $"logical cores ({logical}, on {physical} physical cores)" : $"cores ({logical})";
+        var bars = physical < logical ? "one bar per logical core, those of the same physical core side by side" : "one bar per core";
         var colors = _metrics.CoreSamplingDisabled ? ""
             : _metrics.CoreSamplingAvailable
-                ? $"\nColori: la parte di ogni core usata dai processi di Top CPU sopra il mezzo core ({TrackFromCores * 100 / logical:0.0} %), " +
-                  "fino a tre (il quadratino accanto al nome), campionata dal kernel 100 volte al secondo solo finché ce n'è uno; " +
-                  "il resto nel colore della CPU."
-                : "\nPer vedere nei colori quali processi di Top CPU occupano i core, Pulse va avviato come amministratore.";
-        return $"Somma dei carichi dei {cores}: quanti core pieni vale il lavoro in corso.\n" +
-               $"Sotto il grafico {bars}: tante barre medie vogliono dire lavoro parallelo, una sola piena un thread solo." + colors;
+                ? $"\nColours: the share of each core used by the Top CPU processes above half a core ({TrackFromCores * 100 / logical:0.0} %), " +
+                  "up to three (the small square next to the name), sampled by the kernel 100 times a second, only while there is one; " +
+                  "the rest in the CPU colour."
+                : "\nTo see in colour which Top CPU processes use the cores, run Pulse as administrator.";
+        return $"Sum of the loads of the {cores}: how many full cores the current work is worth.\n" +
+               $"Under the graph, {bars}: many medium bars mean parallel work, a single full one a single thread." + colors;
     }
 
     private string BuildPowerEstimate()
@@ -247,21 +247,21 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         var lines = new List<string>();
         if (!double.IsNaN(m.RamInUseGb))
         {
-            lines.Add($"In uso {m.RamInUseGb:0.0} GB: processi, driver e sistema.");
-            lines.Add($"Modificata {m.RamModifiedGb:0.0} GB: da scrivere su disco prima di poterla riusare.");
-            lines.Add($"In cache {m.RamStandbyGb:0.0} GB: dati e programmi tenuti pronti, Windows la rende appena serve.");
-            lines.Add($"Libera {m.RamFreeGb:0.0} GB.");
-            lines.Add($"Disponibili {m.RamAvailableGb:0.0} GB: la cache più la libera, quello che i programmi possono ancora prendere.");
+            lines.Add($"In use {m.RamInUseGb:0.0} GB: processes, drivers and the system.");
+            lines.Add($"Modified {m.RamModifiedGb:0.0} GB: to be written to disk before it can be reused.");
+            lines.Add($"Cached {m.RamStandbyGb:0.0} GB: data and programs kept ready, given back by Windows as soon as it's needed.");
+            lines.Add($"Free {m.RamFreeGb:0.0} GB.");
+            lines.Add($"Available {m.RamAvailableGb:0.0} GB: cached plus free, what programs can still take.");
         }
         else
         {
-            lines.Add($"Usata {m.RamUsedGb:0.0} GB, disponibili {m.RamAvailableGb:0.0} GB.");
+            lines.Add($"Used {m.RamUsedGb:0.0} GB, available {m.RamAvailableGb:0.0} GB.");
         }
         if (m.RamCommitLimitGb > 0)
-            lines.Add($"Memoria impegnata {m.RamCommittedGb:0.0} di {m.RamCommitLimitGb:0.0} GB: quella chiesta dai programmi, sul limite di RAM più file di paging.");
+            lines.Add($"Committed {m.RamCommittedGb:0.0} of {m.RamCommitLimitGb:0.0} GB: what programs have asked for, against the limit of RAM plus page file.");
         lines.Add(m.PageFileTotalGb > 0
-            ? $"File di paging: {m.PageFileUsedGb:0.00} GB in uso di {m.PageFileTotalGb:0.0} GB."
-            : "Nessun file di paging.");
+            ? $"Page file: {m.PageFileUsedGb:0.00} GB in use of {m.PageFileTotalGb:0.0} GB."
+            : "No page file.");
         return string.Join("\n", lines);
     }
 
@@ -269,7 +269,7 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
 
     private static string FormatUptime(TimeSpan up)
     {
-        if (up.TotalDays >= 1) return $"uptime {(int)up.TotalDays}g {up.Hours}h {up.Minutes}m";
+        if (up.TotalDays >= 1) return $"uptime {(int)up.TotalDays}d {up.Hours}h {up.Minutes}m";
         if (up.TotalHours >= 1) return $"uptime {up.Hours}h {up.Minutes}m";
         return $"uptime {up.Minutes}m";
     }
@@ -303,13 +303,13 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             {
                 CpuTemp.Text = _hw.CpuTempFromWmi ? $"{t1:0}°C*" : $"{t1:0}°C";
                 CpuTemp.ToolTip = _hw.CpuTempFromWmi
-                    ? "Temp da WMI Thermal Zone (approssimata).\nEsegui come admin per lettura MSR esatta."
+                    ? "Temperature from the WMI thermal zone (approximate).\nRun as administrator for the exact MSR reading."
                     : null;
             }
             else
             {
                 CpuTemp.Text = "n/a";
-                CpuTemp.ToolTip = "Temperatura CPU non disponibile.\nEsegui come amministratore per abilitarla.";
+                CpuTemp.ToolTip = "CPU temperature not available.\nRun Pulse as administrator to enable it.";
             }
 
             GpuTemp.Text = _hw.GpuTempC is double t2 && t2 > 5 ? $"{t2:0}°C" : "";
@@ -365,7 +365,7 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
                 Pid = p.Pid,
                 Name = p.Name,
                 Value = $"{p.CpuPercent,5:0.0}%",
-                Tip = $"{p.CpuPercent * processors / 100:0.00} core: quanti core pieni vale questo processo",
+                Tip = $"{p.CpuPercent * processors / 100:0.00} cores: how many full cores this process is worth",
                 Slot = _metrics.CoreSamplingAvailable ? Array.IndexOf(_slotPids, p.Pid) : -2
             }).ToArray();
             TopRamList.ItemsSource = _proc.TopByMemory.Select(p => new ProcessRow
@@ -412,7 +412,7 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         DriveList.ItemsSource = _drive.Drives.Select(d => new DriveRow
         {
             Name = d.Name,
-            Caption = $"{FmtGb(d.FreeGb)} di {FmtGb(d.TotalGb)}",
+            Caption = $"{FmtGb(d.FreeGb)} free of {FmtGb(d.TotalGb)}",
             UsedPercent = d.UsedPercent
         }).ToArray();
     }
@@ -466,12 +466,12 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         if (Topmost)
         {
             PinButton.SetResourceReference(ForegroundProperty, "Reticle.Brush.Accent");
-            PinButton.ToolTip = "Sempre in primo piano: ON (clicca per disattivare)";
+            PinButton.ToolTip = "Always on top: on (click to turn off)";
         }
         else
         {
             PinButton.SetResourceReference(ForegroundProperty, "Reticle.Brush.Text.Muted");
-            PinButton.ToolTip = "Sempre in primo piano: OFF (clicca per attivare)";
+            PinButton.ToolTip = "Always on top: off (click to turn on)";
         }
     }
 
@@ -752,8 +752,8 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         var row = ExtractRow(sender);
         if (row is null) return;
         var result = MessageBox.Show(
-            $"Terminare {row.Name} (PID {row.Pid})?",
-            "Conferma",
+            $"End {row.Name} (PID {row.Pid})?",
+            "Confirm",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
         if (result != MessageBoxResult.Yes) return;
@@ -764,7 +764,7 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Impossibile terminare: {ex.Message}", "Errore",
+            MessageBox.Show($"Couldn't end the process: {ex.Message}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
