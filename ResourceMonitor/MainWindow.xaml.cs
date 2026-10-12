@@ -320,6 +320,8 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
                 : _hw.CpuClockIsAverage ? "Average speed of the cores at work, as in Task Manager"
                 : "Clock of the fastest core";
             CpuPower.Text = _hw.CpuPowerW is double cpw && cpw > 0 ? $"{cpw:0.0}W" : "";
+            // vuoto non occupa posto: il suo margine lascerebbe un buco tra la temperatura e i core
+            CpuPower.Visibility = CpuPower.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
             if (_hw.CpuTempC is double t1 && t1 > 5)
             {
@@ -333,14 +335,17 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             }
 
             GpuTemp.Text = _hw.GpuTempC is double t2 && t2 > 5 ? $"{t2:0}°C" : "";
+            GpuTemp.Visibility = GpuTemp.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             DiskTemp.Text = _hw.StorageTempC is double t3 && t3 > 5 ? $"{t3:0}°C" : "";
 
             var gpuDetailParts = new List<string>();
             if (_hw.GpuClockMhz is double gc && gc > 0) gpuDetailParts.Add($"core {gc:0}MHz");
             if (_hw.GpuMemClockMhz is double mc && mc > 0) gpuDetailParts.Add($"mem {mc:0}MHz");
             if (_hw.GpuPowerW is double pw && pw > 0) gpuDetailParts.Add($"{pw:0.0}W");
-            // una GPU senza frequenze né consumo (l'integrata Intel senza PawnIO): al loro posto il nome, che dice quale si vede
-            if (gpuDetailParts.Count == 0 && !string.IsNullOrEmpty(_hw.GpuName)) gpuDetailParts.Add(ShortName(_hw.GpuName));
+            // il nome, che dice quale GPU si vede: in testa per un'integrata, che non ha frequenze e al più il consumo (con
+            // PawnIO), così la riga non resta quasi vuota; per una scheda solo se non c'è nient'altro
+            if (!string.IsNullOrEmpty(_hw.GpuName) && (_hw.GpuIntegrated || gpuDetailParts.Count == 0))
+                gpuDetailParts.Insert(0, ShortName(_hw.GpuName));
             GpuDetail.Text = string.Join("  •  ", gpuDetailParts);
             GpuVram.ToolTip = _hw.GpuMemShared
                 ? "Integrated GPU: it has no memory of its own and uses the RAM it shares with the CPU (Task Manager's shared GPU memory)"
