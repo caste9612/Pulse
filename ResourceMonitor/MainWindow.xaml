@@ -176,15 +176,19 @@
                             <rt:TrackedText Text="CPU" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource Reticle.Brush.Info}"/>
                             <TextBlock x:Name="CpuValue" Style="{StaticResource BigValue}" Text="—"/>
                             <TextBlock x:Name="CpuClock" Style="{StaticResource InfoText}" Margin="10,0,0,0" Text=""/>
-                            <TextBlock x:Name="CpuPower" Style="{StaticResource InfoText}" Margin="10,0,0,0" Text=""/>
-                            <TextBlock x:Name="CpuTemp" Style="{StaticResource InfoText}" Margin="10,0,0,0" Foreground="{DynamicResource TempBrush}" Text=""/>
                         </StackPanel>
                         <Border Grid.Column="1" Style="{StaticResource SparkBed}">
                             <ctrl:Sparkline x:Name="CpuSpark" Height="26" Stroke="{DynamicResource Reticle.Brush.Info}" MaxValue="100"/>
                         </Border>
                         <!-- sotto il grafico il carico di ogni core logico, a strati nei colori dei processi seguiti quando c'è il
-                             campionamento del kernel; a sinistra quanti core pieni vale (ToolTip da MainWindow) -->
-                        <TextBlock x:Name="CpuCoresText" Grid.Row="1" Style="{StaticResource DimText}" Text=""/>
+                             campionamento del kernel; a sinistra temperatura e consumo, che nella riga sopra stringevano il grafico e
+                             qui stanno nello spazio che restava vuoto, poi quanti core pieni vale, accanto alle sue barre (ToolTip da
+                             MainWindow) -->
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock x:Name="CpuTemp" Style="{StaticResource InfoText}" Margin="0,0,10,0" Foreground="{DynamicResource TempBrush}" Text=""/>
+                            <TextBlock x:Name="CpuPower" Style="{StaticResource InfoText}" Margin="0,0,10,0" Text="" Visibility="Collapsed"/>
+                            <TextBlock x:Name="CpuCoresText" Style="{StaticResource DimText}" Text=""/>
+                        </StackPanel>
                         <ctrl:CoreBars x:Name="CoreBars" Grid.Row="1" Grid.Column="1" Height="12" Margin="14,2,0,2"
                                        Fill="{DynamicResource Reticle.Brush.Info}"/>
                     </Grid>
@@ -229,13 +233,16 @@
                                 <rt:TrackedText Text="GPU" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource Reticle.Brush.Success}"/>
                                 <TextBlock x:Name="GpuValue" Style="{StaticResource BigValue}" Text="—"/>
                                 <TextBlock x:Name="GpuVram" Style="{StaticResource InfoText}" Margin="10,0,0,0" Text=""/>
-                                <TextBlock x:Name="GpuTemp" Style="{StaticResource InfoText}" Margin="10,0,0,0" Foreground="{DynamicResource TempBrush}" Text=""/>
                             </StackPanel>
                             <Border Grid.Column="1" Style="{StaticResource SparkBed}">
                                 <ctrl:Sparkline x:Name="GpuSpark" Height="26" Stroke="{DynamicResource Reticle.Brush.Success}" MaxValue="100"/>
                             </Border>
                         </Grid>
-                        <TextBlock x:Name="GpuDetail" Style="{StaticResource DimText}" Text="" Margin="0,0,0,2"/>
+                        <!-- la riga sotto, larga quanto il widget: la temperatura, come per la CPU, poi frequenze e consumo -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                            <TextBlock x:Name="GpuTemp" Style="{StaticResource InfoText}" Margin="0,0,10,0" Foreground="{DynamicResource TempBrush}" Text="" Visibility="Collapsed"/>
+                            <TextBlock x:Name="GpuDetail" Style="{StaticResource DimText}" Text=""/>
+                        </StackPanel>
                     </StackPanel>
 
                     <Rectangle Style="{StaticResource MetricDivider}"/>
