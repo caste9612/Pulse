@@ -6,7 +6,7 @@ How to build Pulse from source.
 
 - Windows 10 / 11
 - .NET 9 SDK or newer ([download](https://dotnet.microsoft.com/download/dotnet/9.0)): the project targets `net9.0-windows`, and the .NET 10 SDK builds it too
-- (Optional) Inno Setup 6+ to build the installer ([download](https://jrsoftware.org/isdl.php) or `winget install JRSoftware.InnoSetup`)
+- (Optional) Inno Setup 6.1+ to build the installer (6.1 brought the download page the PawnIO option uses) ([download](https://jrsoftware.org/isdl.php) or `winget install JRSoftware.InnoSetup`)
 - (Optional) Visual Studio 2022/2026 or VS Code with C# extension
 
 The Reticle UI library (the author's WPF design system, v1.2.0 onwards) ships as two DLLs in `lib/Reticle`, so nothing else is needed to build.
@@ -139,7 +139,7 @@ Pulse writes to `%TEMP%\pulse-perf.log` whenever a tick exceeds its threshold (5
 
 ## Building the installer
 
-Requires Inno Setup 6+:
+Requires Inno Setup 6.1+:
 
 ```powershell
 winget install JRSoftware.InnoSetup

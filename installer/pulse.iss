@@ -10,6 +10,12 @@
 ; Pulse looks up the logon task by this name too (TaskName in ResourceMonitor/Services/AdminStart.cs): change both together
 #define MyAppTaskName "Pulse"
 #define MyAppRestartTaskName "Pulse restart"
+; PawnIO, the driver LibreHardwareMonitor reads the CPU's MSRs through (temperature, power, core clocks). Not bundled: its
+; releases come with no licence to redistribute them. Downloaded from its official release and checked against this SHA256,
+; the one of winget's manifest (namazso.PawnIO); the setup is signed by namazso. Bump all three together
+#define PawnIOVersion "2.2.0"
+#define PawnIOUrl "https://github.com/namazso/PawnIO.Setup/releases/download/" + PawnIOVersion + "/PawnIO_setup.exe"
+#define PawnIOSha256 "1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a9fba3032"
 
 [Setup]
 AppId={{A8D7E0B0-3F4C-4D6E-9A2B-1C3D5E6F7A8B}
@@ -41,6 +47,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [CustomMessages]
 english.StartupTask=Start with Windows (normal user)
 english.StartupAdminTask=Start with administrator privileges (for CPU temp/watt on supported systems)
+english.PawnIOTask=Install the PawnIO driver, for CPU temperature and power (downloaded from its official release)
+english.PawnIOInstalling=Installing the PawnIO driver...
+english.PawnIODownloadFailed=The PawnIO driver could not be downloaded:%n%1%n%nPulse is installed without it: CPU temperature and power will read n/a. You can install PawnIO later with: winget install namazso.PawnIO
 english.RestartTask=Restart Pulse if it closes because of an error
 english.DesktopIconTask=Create desktop shortcut
 english.OptionsGroup=Installation options:
@@ -48,6 +57,9 @@ english.OptionsGroup=Installation options:
 [Tasks]
 Name: "startup"; Description: "{cm:StartupTask}"; GroupDescription: "{cm:OptionsGroup}"; Flags: unchecked
 Name: "startup_admin"; Description: "{cm:StartupAdminTask}"; GroupDescription: "{cm:OptionsGroup}"; Flags: unchecked
+; under the administrator option: only an elevated Pulse can use the driver. Ticked with its parent, offered only when PawnIO
+; isn't installed yet
+Name: "startup_admin\pawnio"; Description: "{cm:PawnIOTask}"; GroupDescription: "{cm:OptionsGroup}"; Check: not IsPawnIOInstalled
 Name: "restart"; Description: "{cm:RestartTask}"; GroupDescription: "{cm:OptionsGroup}"
 Name: "desktopicon"; Description: "{cm:DesktopIconTask}"; GroupDescription: "{cm:OptionsGroup}"; Flags: unchecked
 
@@ -104,6 +116,12 @@ Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{tmp}\register-task.ps1"" -Remove -Name ""{#MyAppRestartTaskName}"""; \
   Tasks: startup_admin and not restart; Flags: runhidden waituntilterminated
 
+; PawnIO from its official setup, downloaded before the installation started (NextButtonClick) and only if the download
+; worked. Started elevated (runas: one UAC prompt with "Install for me only"), so waiting for it waits for the real install and
+; Pulse, launched below, already finds the driver. Uninstalling Pulse leaves it: other programs use it too
+Filename: "{tmp}\PawnIO_setup.exe"; Parameters: "-install -silent"; StatusMsg: "{cm:PawnIOInstalling}"; \
+  Verb: "runas"; Tasks: startup_admin\pawnio; Check: PawnIODownloaded; Flags: shellexec waituntilterminated
+
 ; Launch the app at end of install
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
@@ -118,6 +136,58 @@ Filename: "{cmd}"; Parameters: "/c schtasks /Delete /TN ""{#MyAppTaskName}"" /F 
   Verb: "runas"; Tasks: startup_admin; Check: not IsAdminInstallMode; Flags: shellexec runhidden waituntilterminated; RunOnceId: "DelPulseTasksElevated"
 
 [Code]
+var
+  DownloadPage: TDownloadWizardPage;
+  PawnIOReady: Boolean;
+
+// PawnIO is installed when its uninstall entry is there: LibreHardwareMonitor and Pulse look for it in the same place
+function IsPawnIOInstalled: Boolean;
+begin
+  Result := RegKeyExists(HKLM64, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO');
+end;
+
+// its setup was downloaded and matched the SHA256: the [Run] entry can start it
+function PawnIODownloaded: Boolean;
+begin
+  Result := PawnIOReady;
+end;
+
+function OnDownloadProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;
+begin
+  Result := True;
+end;
+
+procedure InitializeWizard;
+begin
+  DownloadPage := CreateDownloadPage(SetupMessage(msgWizardPreparing), SetupMessage(msgPreparingDesc), @OnDownloadProgress);
+end;
+
+// With the PawnIO option, its setup is downloaded once the user confirms on the Ready page, into {tmp}, and checked against
+// its SHA256. A failed download doesn't stop Pulse's installation: a message says so and how to install PawnIO later.
+// Aborted by the user, the wizard stays on the Ready page, where the option can be unticked
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID <> wpReady) or not WizardIsTaskSelected('startup_admin\pawnio') then
+    Exit;
+  DownloadPage.Clear;
+  DownloadPage.Add('{#PawnIOUrl}', 'PawnIO_setup.exe', '{#PawnIOSha256}');
+  DownloadPage.Show;
+  try
+    try
+      DownloadPage.Download;
+      PawnIOReady := True;
+    except
+      if DownloadPage.AbortedByUser then
+        Result := False
+      else
+        SuppressibleMsgBox(FmtMessage(CustomMessage('PawnIODownloadFailed'), [GetExceptionMessage]), mbError, MB_OK, IDOK);
+    end;
+  finally
+    DownloadPage.Hide;
+  end;
+end;
+
 // Check if .NET 9 Desktop Runtime is installed
 function IsDotNet9DesktopRuntimeInstalled: Boolean;
 var

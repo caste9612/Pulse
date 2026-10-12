@@ -10,14 +10,15 @@ What `Setup-Pulse-vX.Y.Z.exe` does and how it works.
 4. Choose options:
    - ☐ Start with Windows (regular user privileges)
    - ☐ **Start with administrator privileges** (uses Scheduled Task — no UAC at login, enables CPU temp/power on systems with the PawnIO driver installed)
+     - ☑ **Install the PawnIO driver** (ticked with its parent, offered only when PawnIO is missing; see [PawnIO](#pawnio))
    - ☑ **Restart Pulse if it closes because of an error** (ticked by default; a second Scheduled Task, see [Restart after a crash](#restart-after-a-crash))
    - ☐ Create desktop shortcut
-5. Click Install → files copied
+5. Click Install → with the PawnIO option, its setup is downloaded first; then files copied
 6. Optionally launches Pulse at end of install (as a normal user; with *Start with administrator privileges* Pulse then goes through its task and comes back elevated, see below)
 
 With both startup options ticked, only the Scheduled Task is created: the `Run` value is written for *Start with Windows* alone.
 
-Uninstall via Settings → Apps removes the program, the shortcuts, the autostart value written by the installer and both Scheduled Tasks. Settings (`%APPDATA%\Pulse`) and appearance (`%LOCALAPPDATA%\Pulse`) stay, so a reinstall finds them.
+Uninstall via Settings → Apps removes the program, the shortcuts, the autostart value written by the installer and both Scheduled Tasks. Settings (`%APPDATA%\Pulse`) and appearance (`%LOCALAPPDATA%\Pulse`) stay, so a reinstall finds them, and so does PawnIO, which other programs use too.
 
 ## Per-user vs system-wide
 
@@ -80,6 +81,17 @@ On 10/10/2026 an NVIDIA driver update crashed a running Pulse four seconds later
 
 Closing Pulse from the tray, or ending it from Task Manager, writes no crash event and restarts nothing. Two simpler mechanisms were tried and don't do this: the task setting *If the task fails, restart every…* only covers a task that fails to start, not a program that crashes later, and `RegisterApplicationRestart` relies on Windows Error Reporting, which is turned off on some machines (the reference PC among them).
 
+## PawnIO
+
+CPU temperature, power and core clocks need Pulse running as administrator *and* the PawnIO driver, through which LibreHardwareMonitor 0.9.6 reads the CPU's registers (`HARDWARE-SUPPORT.md`). Under *Start with administrator privileges* the installer offers **Install the PawnIO driver**: a sub-option, since a Pulse without the rights can't use the driver, ticked with its parent, and shown only when PawnIO is missing (`Check: not IsPawnIOInstalled`: its uninstall entry, `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO`, where LibreHardwareMonitor and Pulse look for it too).
+
+- **Downloaded, not bundled**: PawnIO's releases come with no licence to redistribute them. When the user clicks *Install* on the *Ready* page (`NextButtonClick`), Inno Setup's download page fetches `PawnIO_setup.exe` of the pinned version from its official GitHub release (`namazso/PawnIO.Setup`) into `{tmp}` and checks it against the SHA256 of winget's manifest (`namazso.PawnIO`). The setup is signed by namazso. `PawnIOVersion`, `PawnIOUrl` and `PawnIOSha256` at the top of `pulse.iss` change together.
+- **Installed elevated, before Pulse starts**: a `[Run]` entry starts it with winget's switches, `-install -silent`, with the `runas` verb, so Setup waits for the installation itself rather than for a launcher that elevates itself and exits. With *Install for me only* it is one more UAC prompt, after the one of the Scheduled Tasks; with *Install for all users* none. The Pulse launched at the end then finds the driver and, through the logon task, shows the temperature at once.
+- **A failed download doesn't stop the installation** (no connection, a file that doesn't match): a message says Pulse is installed without PawnIO and how to install it later, `winget install namazso.PawnIO`. Aborting the download keeps the wizard on the *Ready* page, where the option can be unticked.
+- **Uninstalling Pulse leaves PawnIO**: other programs (FanControl, LibreHardwareMonitor) use it too, and it has its own entry in Settings → Apps.
+
+The driver loads at every boot by itself: its setup registers a root-enumerated device, `ROOT\PAWNIO\0000`, so the `DEMAND_START` of its service is what a Plug and Play driver normally has.
+
 ## What's in the installer
 
 ```
@@ -94,7 +106,7 @@ Setup-Pulse-vX.Y.Z.exe (~6 MB)
 └── unins000.exe                  (Inno Setup uninstaller)
 ```
 
-During setup only, `register-task.ps1`, `task-logon.xml` and `task-crash.xml` are extracted to `{tmp}` to register the Scheduled Tasks.
+During setup only, `register-task.ps1`, `task-logon.xml` and `task-crash.xml` are extracted to `{tmp}` to register the Scheduled Tasks, and with the PawnIO option its setup (~3.3 MB) is downloaded there.
 
 Total install footprint: ~12 MB plus the uninstaller.
 
@@ -125,7 +137,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 ## Building locally
 
-After installing Inno Setup (`winget install JRSoftware.InnoSetup`):
+After installing Inno Setup 6.1 or later, for the download page of the PawnIO option (`winget install JRSoftware.InnoSetup`):
 
 ```powershell
 # Build the app first

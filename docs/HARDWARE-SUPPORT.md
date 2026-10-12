@@ -44,7 +44,7 @@ On modern Windows (10/11) with security features like:
 
 The same on Intel and AMD:
 
-1. **Install [PawnIO](https://pawnio.eu)**, once: from its site or, in an administrator terminal, `winget install namazso.PawnIO`. It stays installed as a driver service; nothing has to be kept open.
+1. **Install [PawnIO](https://pawnio.eu)**, once: with the installer's *Install the PawnIO driver*, under *Start with administrator privileges* (it downloads the official setup and checks it, see `INSTALLER.md`), from its site, or in an administrator terminal with `winget install namazso.PawnIO`. It stays installed as a driver and loads at every boot; nothing has to be kept open.
 2. **Run Pulse as administrator**: the installer's *Start with administrator privileges* does it at every start with no UAC prompt (see `INSTALLER.md`), or *Restart as administrator* in the tray menu.
 
 **Verify it's installed** (the key LibreHardwareMonitor and Pulse look for):
@@ -118,4 +118,4 @@ Then update the sensor name filters in `HardwareMonitor.Update()` if needed — 
 - [ ] HWiNFO64 shared memory backend (for systems where PawnIO can't be installed)
 - [ ] AMD μProf / AthenaSDK direct integration
 - [ ] Bundle a Pulse-signed driver (requires Microsoft EV cert — not cheap)
-- [ ] Detect at install time that PawnIO is missing and offer to install it
+- [x] Detect at install time that PawnIO is missing and offer to install it (the installer's *Install the PawnIO driver*, from v1.3.3)
