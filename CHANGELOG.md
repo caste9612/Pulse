@@ -5,7 +5,7 @@ All notable changes to Pulse will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v1.3.2] - 2026-10-12
 
 ### Changed
 - **Temperatures and power on the line below**: the CPU's first line held the load, the clock, the power and the temperature, which pushed its graph to the right (from x 186 to 262 on a 436-wide widget), while the line under it had only "≈ 4.6 cores in use" and empty space under the clock, power and temperature. The temperature and the power now open that line ("87°C  132.0W  ≈ 4.6 cores in use"), next to the core bars, and the CPU graph starts where the RAM's does; the GPU temperature opens the GPU's detail line, before clocks and power. The name of an integrated GPU now always leads its detail line ("Intel UHD Graphics 750 • 1.9W"), which otherwise held only the power. The Fit size doesn't change: the network and disk lines set the width.
