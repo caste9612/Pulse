@@ -251,10 +251,19 @@ public sealed class NativeMetrics
     private Dictionary<long, (ulong In, ulong Out)> _prevNet = new();
     private DateTime _prevNetSample = DateTime.MinValue;
 
+    // le interfacce da contare, scelte con GetIfTable2 ogni 10 secondi e subito quando una smette di essere attiva; a ogni secondo
+    // si leggono solo quelle, con GetIfEntry2. GetIfTable2 interroga tutte le interfacce, filtri compresi: 64 su un PC con Hyper-V,
+    // WSL, una VPN e i filtri del driver di una telecamera, 2,4 ms a lettura sul thread della UI e picchi oltre i 100 ms, contro
+    // 0,05 ms di GetIfEntry2 sulla sola scheda attiva (12/10/2026)
+    private long[] _netLuids = Array.Empty<long>();
+    private DateTime _netScan = DateTime.MinValue;
+    private static readonly TimeSpan NetScanInterval = TimeSpan.FromSeconds(10);
+
     // MIB_IF_ROW2 (netioapi.h) letta per posizioni: 1352 byte, Alias e Description in UTF-16 da 257 caratteri. La struttura
     // dichiarata fino alla 1.2.0 contava le stringhe come ANSI (864 byte): righe e campi fuori posto, traffico sempre 0
     private const int IfRowSize = 1352;
-    private const int IfRowLuid = 0, IfRowType = 1128, IfRowFlags = 1152, IfRowOperStatus = 1156, IfRowInOctets = 1208, IfRowOutOctets = 1280;
+    private const int IfRowLuid = 0, IfRowIndex = 8, IfRowType = 1128, IfRowFlags = 1152, IfRowOperStatus = 1156, IfRowInOctets = 1208, IfRowOutOctets = 1280;
+    private readonly byte[] _ifRow = new byte[IfRowSize];
 
     public struct NetRates
     {
@@ -265,15 +274,56 @@ public sealed class NativeMetrics
     public NetRates GetNetworkRates()
     {
         var result = new NetRates();
-        if (GetIfTable2(out IntPtr tablePtr) != 0 || tablePtr == IntPtr.Zero) return result;
+        var now = DateTime.UtcNow;
+        if (now - _netScan > NetScanInterval) ScanInterfaces(now);
+
+        var current = new Dictionary<long, (ulong In, ulong Out)>(_netLuids.Length);
+        bool lost = false;
+        foreach (long luid in _netLuids)
+        {
+            // in ingresso basta l'InterfaceLuid (l'indice a zero); il resto della riga lo riempie Windows
+            BitConverter.TryWriteBytes(_ifRow.AsSpan(IfRowLuid), luid);
+            BitConverter.TryWriteBytes(_ifRow.AsSpan(IfRowIndex), 0);
+            if (GetIfEntry2(_ifRow) != 0 || BitConverter.ToInt32(_ifRow, IfRowOperStatus) != 1) { lost = true; continue; }
+            current[luid] = (BitConverter.ToUInt64(_ifRow, IfRowInOctets), BitConverter.ToUInt64(_ifRow, IfRowOutOctets));
+        }
+        // una scheda sparita o non più attiva (il cavo staccato, il Wi-Fi spento): le interfacce si riscelgono al secondo dopo
+        if (lost) _netScan = DateTime.MinValue;
+
+        if (_prevNetSample != DateTime.MinValue)
+        {
+            double seconds = (now - _prevNetSample).TotalSeconds;
+            ulong recv = 0, sent = 0;
+            foreach (var (luid, c) in current)
+            {
+                // solo le interfacce che c'erano anche prima; un contatore che riparte da zero non conta
+                if (!_prevNet.TryGetValue(luid, out var p) || c.In < p.In || c.Out < p.Out) continue;
+                recv += c.In - p.In;
+                sent += c.Out - p.Out;
+            }
+            if (seconds > 0)
+            {
+                result.ReceiveBytesPerSec = recv / seconds;
+                result.SendBytesPerSec = sent / seconds;
+            }
+        }
+        _prevNet = current;
+        _prevNetSample = now;
+        return result;
+    }
+
+    // si contano le schede fisiche attive (flag HardwareInterface): Windows mostra la stessa scheda anche come filtri (WFP, QoS)
+    // con gli stessi byte, e le schede virtuali (VPN, Hyper-V, ZeroTier) passano comunque da una fisica. Se un sistema non segnala
+    // nessuna scheda fisica, si contano tutte le interfacce attive che non sono filtri. Se GetIfTable2 fallisce restano le ultime
+    private void ScanInterfaces(DateTime now)
+    {
+        _netScan = now;
+        if (GetIfTable2(out IntPtr tablePtr) != 0 || tablePtr == IntPtr.Zero) return;
         try
         {
             int numEntries = Marshal.ReadInt32(tablePtr); // ULONG NumEntries, poi le righe allineate a 8 byte
-            // si contano le schede fisiche attive (flag HardwareInterface): Windows mostra la stessa scheda anche come filtri (WFP,
-            // QoS) con gli stessi byte, e le schede virtuali (VPN, Hyper-V, ZeroTier) passano comunque da una fisica. Se un sistema
-            // non segnala nessuna scheda fisica, si contano tutte le interfacce che non sono filtri, come prima
-            var hardware = new Dictionary<long, (ulong In, ulong Out)>();
-            var notFilters = new Dictionary<long, (ulong In, ulong Out)>();
+            var hardware = new List<long>();
+            var notFilters = new List<long>();
             for (int i = 0; i < numEntries; i++)
             {
                 IntPtr row = IntPtr.Add(tablePtr, 8 + i * IfRowSize);
@@ -281,39 +331,16 @@ public sealed class NativeMetrics
                 int type = Marshal.ReadInt32(row, IfRowType);
                 if (type is 24 or 131) continue;                              // IF_TYPE_SOFTWARE_LOOPBACK, IF_TYPE_TUNNEL
                 byte flags = Marshal.ReadByte(row, IfRowFlags);                // InterfaceAndOperStatusFlags
-                var counters = ((ulong)Marshal.ReadInt64(row, IfRowInOctets), (ulong)Marshal.ReadInt64(row, IfRowOutOctets));
                 long luid = Marshal.ReadInt64(row, IfRowLuid);
-                if ((flags & 1) != 0) hardware[luid] = counters;               // HardwareInterface
-                if ((flags & 2) == 0) notFilters[luid] = counters;             // non FilterInterface
+                if ((flags & 1) != 0) hardware.Add(luid);                      // HardwareInterface
+                if ((flags & 2) == 0) notFilters.Add(luid);                    // non FilterInterface
             }
-            var current = hardware.Count > 0 ? hardware : notFilters;
-
-            var now = DateTime.UtcNow;
-            if (_prevNetSample != DateTime.MinValue)
-            {
-                double seconds = (now - _prevNetSample).TotalSeconds;
-                ulong recv = 0, sent = 0;
-                foreach (var (luid, c) in current)
-                {
-                    // solo le interfacce che c'erano anche prima; un contatore che riparte da zero non conta
-                    if (!_prevNet.TryGetValue(luid, out var p) || c.In < p.In || c.Out < p.Out) continue;
-                    recv += c.In - p.In;
-                    sent += c.Out - p.Out;
-                }
-                if (seconds > 0)
-                {
-                    result.ReceiveBytesPerSec = recv / seconds;
-                    result.SendBytesPerSec = sent / seconds;
-                }
-            }
-            _prevNet = current;
-            _prevNetSample = now;
+            _netLuids = (hardware.Count > 0 ? hardware : notFilters).ToArray();
         }
         finally
         {
             FreeMibTable(tablePtr);
         }
-        return result;
     }
 
     // ===== CPU FREQUENCY =====
@@ -403,6 +430,9 @@ public sealed class NativeMetrics
 
     [DllImport("iphlpapi.dll")]
     private static extern void FreeMibTable(IntPtr memory);
+
+    [DllImport("iphlpapi.dll")]
+    private static extern int GetIfEntry2([In, Out] byte[] row);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct PROCESSOR_POWER_INFORMATION

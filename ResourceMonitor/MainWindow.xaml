@@ -154,7 +154,7 @@
                         <rt:TrackedText Text="Pulse" Style="{StaticResource Reticle.Tracked.Legend}" Margin="8,0,0,0" VerticalAlignment="Center"/>
                         <TextBlock x:Name="UptimeText" Style="{StaticResource InfoText}" Margin="14,0,0,0"/>
                         <TextBlock x:Name="PowerText" Style="{StaticResource InfoText}" Foreground="{DynamicResource TempBrush}" Margin="14,0,0,0"
-                                   ToolTip="Estimated total PC power (CPU + GPU + about 30 W for the rest)"/>
+                                   ToolTip="Estimated total PC power: CPU + graphics card + about 30 W for the rest (an integrated GPU is part of the CPU figure)"/>
                     </StackPanel>
                 </DockPanel>
             </Border>

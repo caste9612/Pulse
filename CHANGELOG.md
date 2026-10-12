@@ -5,6 +5,25 @@ All notable changes to Pulse will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.3.1] - 2026-10-12
+
+Checked on a second PC, the opposite of the reference one: Intel Core i9-11900K, no graphics card (Intel UHD Graphics 750), Windows 11 in Italian, Hyper-V, WSL and a VPN.
+
+### Fixed
+- **The GPU read 0% on a PC without a graphics card**, with no memory, clocks or name: Pulse looked for the "GPU Core" load and the "GPU Memory" sensors, which only NVIDIA and AMD cards have. An Intel integrated GPU has only the load of its D3D engines (3D, copy, video...) and memory shared with the CPU. The load is now that of the busiest engine, as in Task Manager (on the test PC 46.6% against the 47.1% of the *GPU Engine* counters Task Manager reads, and as close over eight seconds), the memory reads "shared 2.0 / 15.9 GB" with a tooltip, and the GPU name takes the detail line left empty by clocks and power. An integrated GPU is shown only when no card has memory of its own, and its power never goes into the PC estimate: it is already in the CPU package.
+- **The CPU clock stuck at the base clock** without the MSR sensors (no PawnIO, see below, or no administrator rights): Windows' `CallNtPowerInformation` gives the base clock on recent Intel processors, so the widget read 3.50 GHz at rest and under load alike on the i9-11900K. It now shows the average speed of the cores at work, as Task Manager does: the base clock times the "% Processor Performance" of the kernel's *Processor Information* counters, read with the PerfLib V2 consumer API (advapi32). On the test PC 2.5–3.0 GHz at rest and 4.6 GHz with eight busy threads, the same values as PDH, which cost 6.4 MB of private memory and 420 ms at start against under 1 MB and about 0.4 ms per read. The tooltip says which clock is shown. With the MSR sensors the clock is the fastest core's, as before.
+- **The CPU temperature tooltip** said to run Pulse as administrator even when it already was. It now says what is missing: the PawnIO driver, the rights, or both.
+- **The Wi-Fi signal was missing on a Windows in another language**: it was read from `netsh wlan show interfaces` by its English label, *Signal*, which netsh translates (*Segnale* in Italian). Without the English label it is now the line that ends with a percentage, the only one in that list. Checked on netsh outputs in Italian and English; not on a live connection, the test PC's Wi-Fi being off.
+
+### Changed
+- **PawnIO**: LibreHardwareMonitor 0.9.6 reads the CPU temperature, power and core clocks only through the PawnIO driver, which it doesn't ship: it has to be installed (pawnio.eu, `winget install namazso.PawnIO`), and without it those sensors stay empty even as administrator, on Intel and AMD alike. README and HARDWARE-SUPPORT no longer send AMD users to Ryzen Master and Intel users to a driver of LibreHardwareMonitor's own: the library uses neither.
+- **Network, lighter on PCs with many interfaces**: the throughput read the whole interface table (`GetIfTable2`) every second on the UI thread, 64 interfaces on the test PC (Hyper-V, WSL, a VPN, the filters of a camera driver): 2.4–3 ms per read, with peaks over 100 ms. The adapters to count are now chosen every 10 seconds, and at once when one stops being up, and only those are read every second (`GetIfEntry2`): 0.3 ms. The active adapter and the local IP (`GetAllNetworkInterfaces`, about 30 ms there) are read when Windows reports an address change and once a minute, instead of every 2 seconds.
+
+### Performance (i9-11900K test PC, PC idle, same 436 × 551 window, v1.3.0 vs this build alternated in two 45 s rounds on 12/10/2026, not elevated)
+- CPU: 3.13% → 2.87% of one core (3.58 and 2.67 against 2.64 and 3.09: within the noise; most of the 30 ms of the adapter scan was waiting, not CPU). As administrator, the way Pulse runs on that PC, the CI build of this version against v1.3.0 in two more alternated rounds: 4.00% → 3.70%, with the PC busier, within the noise too
+- 1 s tick on the UI thread: about 4 → 1 ms, network peaks over 100 ms gone
+- Private memory: about 100 MB in both. The working set of a newly built exe is about 80 MB higher in its first runs on this PC, the same for v1.3.0 built here: the Intel driver compiles WPF's shaders for a new executable, then reuses them. Compare working sets after a couple of runs.
+
 ## [v1.3.0] - 2026-10-11
 
 ### Added
