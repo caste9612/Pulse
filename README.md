@@ -77,6 +77,8 @@ v1.3.1 was checked on a second PC, the opposite of the reference one: Intel Core
 | GPU | 0%: the integrated GPU was not read | the busiest D3D engine, as in Task Manager |
 | CPU clock | 3.50 GHz, the base clock, at all times | 2.5–3.0 GHz at rest, 4.6 GHz under load |
 
+As administrator, the way Pulse runs on that PC, two more alternated rounds gave 4.00% and 3.70% of one core: the PC was busier, and the gap is within the noise there too.
+
 ### How we got here (the things that matter)
 
 1. **No PerformanceCounter** — every metric is read via direct Win32 P/Invoke (`GetSystemTimes`, `GetPerformanceInfo`, `GetIfTable2`, `NtQuerySystemInformation`, `CallNtPowerInformation`). Each tick is ~5 ms instead of the ~45 ms it would cost using `PerformanceCounter`/PDH.

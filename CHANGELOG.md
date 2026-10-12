@@ -5,7 +5,7 @@ All notable changes to Pulse will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v1.3.1] - 2026-10-12
 
 Checked on a second PC, the opposite of the reference one: Intel Core i9-11900K, no graphics card (Intel UHD Graphics 750), Windows 11 in Italian, Hyper-V, WSL and a VPN.
 
@@ -20,7 +20,7 @@ Checked on a second PC, the opposite of the reference one: Intel Core i9-11900K,
 - **Network, lighter on PCs with many interfaces**: the throughput read the whole interface table (`GetIfTable2`) every second on the UI thread, 64 interfaces on the test PC (Hyper-V, WSL, a VPN, the filters of a camera driver): 2.4–3 ms per read, with peaks over 100 ms. The adapters to count are now chosen every 10 seconds, and at once when one stops being up, and only those are read every second (`GetIfEntry2`): 0.3 ms. The active adapter and the local IP (`GetAllNetworkInterfaces`, about 30 ms there) are read when Windows reports an address change and once a minute, instead of every 2 seconds.
 
 ### Performance (i9-11900K test PC, PC idle, same 436 × 551 window, v1.3.0 vs this build alternated in two 45 s rounds on 12/10/2026, not elevated)
-- CPU: 3.13% → 2.87% of one core (3.58 and 2.67 against 2.64 and 3.09: within the noise; most of the 30 ms of the adapter scan was waiting, not CPU)
+- CPU: 3.13% → 2.87% of one core (3.58 and 2.67 against 2.64 and 3.09: within the noise; most of the 30 ms of the adapter scan was waiting, not CPU). As administrator, the way Pulse runs on that PC, the CI build of this version against v1.3.0 in two more alternated rounds: 4.00% → 3.70%, with the PC busier, within the noise too
 - 1 s tick on the UI thread: about 4 → 1 ms, network peaks over 100 ms gone
 - Private memory: about 100 MB in both. The working set of a newly built exe is about 80 MB higher in its first runs on this PC, the same for v1.3.0 built here: the Intel driver compiles WPF's shaders for a new executable, then reuses them. Compare working sets after a couple of runs.
 
