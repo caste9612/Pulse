@@ -124,6 +124,7 @@ When you run `Setup-Pulse-vX.Y.Z.exe`, the wizard offers two startup options:
 
 - ☐ **Start with Windows** — registers `HKCU\…\Run` so Pulse launches on login (regular user privileges, no UAC prompt)
 - ☐ **Start with administrator privileges** ← *check this if you want CPU temp/power*
+  - ☑ **Install the PawnIO driver** — ticked with its parent, offered only when PawnIO is missing ([below](#why-admin-alone-isnt-enough-pawnio))
 
 The second checkbox creates a **Windows Scheduled Task** with trigger *On Logon* and *Run with highest privileges*. This is the standard workaround used by HWiNFO64, ThrottleStop, MSI Afterburner et al. to avoid the UAC prompt at every login. Once configured, Windows itself launches Pulse with an elevated token at boot — no clicking, no warnings. The task has no run-time limit (the Task Scheduler default stopped Pulse after 72 hours) and starts on battery too.
 
@@ -137,7 +138,9 @@ The Scheduled Tasks are removed when you uninstall Pulse.
 
 ### Why admin alone isn't enough: PawnIO
 
-Reading MSRs takes a kernel driver, and LibreHardwareMonitor, the library Pulse reads the CPU sensors with, no longer brings one of its own: version 0.9.6 uses only **PawnIO**, a signed driver installed separately, once, from [pawnio.eu](https://pawnio.eu) or with:
+Reading MSRs takes a kernel driver, and LibreHardwareMonitor, the library Pulse reads the CPU sensors with, no longer brings one of its own: version 0.9.6 uses only **PawnIO**, a signed driver installed separately, once.
+
+The installer does it with **Install the PawnIO driver**, under *Start with administrator privileges*: it downloads PawnIO's official setup, checks it against a known SHA256 and runs it, with one more UAC prompt (see [`docs/INSTALLER.md`](docs/INSTALLER.md#pawnio)). PawnIO isn't bundled, since its releases come with no licence to redistribute them. Otherwise, from [pawnio.eu](https://pawnio.eu) or with:
 
 ```powershell
 winget install namazso.PawnIO
@@ -155,6 +158,7 @@ Download the latest `Setup-Pulse-vX.Y.Z.exe` from the [Releases page](../../rele
 
 - ☐ Start with Windows (login)
 - ☐ **Start with administrator privileges** (see section above — with the PawnIO driver, enables CPU temp/power)
+  - ☑ Install the PawnIO driver (ticked with its parent, offered only when PawnIO is missing)
 - ☑ Restart Pulse if it closes because of an error (ticked by default)
 - ☐ Create desktop shortcut
 
@@ -169,7 +173,7 @@ Grab `Pulse-vX.Y.Z-portable.zip` from Releases, extract anywhere, and run `Pulse
 - Windows 10 / 11 (x64); the Mica and Acrylic transparency needs Windows 11 22H2 or later (elsewhere the widget is opaque)
 - .NET 9 Desktop Runtime ([download](https://dotnet.microsoft.com/download/dotnet/9.0))
 
-Optional, to unlock CPU temperature / power (Intel and AMD): the [PawnIO](https://pawnio.eu) driver (`winget install namazso.PawnIO`) and Pulse running as administrator, best through the installer's *Start with administrator privileges*. Without them CPU temp/power show as `n/a` and the clock is the average speed of the cores; everything else still works.
+Optional, to unlock CPU temperature / power (Intel and AMD): the [PawnIO](https://pawnio.eu) driver and Pulse running as administrator, both from the installer (*Start with administrator privileges* and, under it, *Install the PawnIO driver*) or PawnIO with `winget install namazso.PawnIO`. Without them CPU temp/power show as `n/a` and the clock is the average speed of the cores; everything else still works.
 
 ## Tray menu
 
