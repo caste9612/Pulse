@@ -204,7 +204,8 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
     private string BuildPowerEstimate()
     {
         const double BaselineW = 30; // mobo + RAM + SSD + fans (rough)
-        double gpuW = _hw.TotalGpuPowerW ?? _hw.GpuPowerW ?? 0;
+        // una GPU integrata consuma dentro il pacchetto della CPU: contarla di nuovo la metterebbe due volte
+        double gpuW = _hw.GpuIntegrated ? 0 : _hw.TotalGpuPowerW ?? _hw.GpuPowerW ?? 0;
         double cpuW;
         bool cpuFromLhm = _hw.CpuPowerW is double cw && cw > 0;
         if (cpuFromLhm)
@@ -223,21 +224,38 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         return $"PC {tilde}{total:0} W";
     }
 
+    // perché manca la temperatura della CPU: LibreHardwareMonitor la legge dai registri MSR, che vogliono Pulse da amministratore
+    // e il driver PawnIO, da installare a parte (la libreria non ne porta uno suo)
+    private static string CpuSensorsHint() => (HardwareMonitor.IsElevated, HardwareMonitor.PawnIoInstalled) switch
+    {
+        (true, true) => "CPU temperature not available: the processor's sensors could not be read.",
+        (true, false) => "CPU temperature and power need the PawnIO driver.\nInstall it from pawnio.eu (or: winget install namazso.PawnIO), then restart Pulse.",
+        (false, true) => "CPU temperature not available.\nRun Pulse as administrator to enable it.",
+        (false, false) => "CPU temperature and power need the PawnIO driver and Pulse running as administrator.\nInstall PawnIO from pawnio.eu (or: winget install namazso.PawnIO)."
+    };
+
+    // "Intel(R) UHD Graphics 750" → "Intel UHD Graphics 750"
+    private static string ShortName(string name) =>
+        name.Replace("(R)", "", StringComparison.OrdinalIgnoreCase).Replace("(TM)", "", StringComparison.OrdinalIgnoreCase).Replace("  ", " ").Trim();
+
     private string BuildVramText()
     {
         double totalGb = 0;
         double usedGb = 0;
-        if (_hw.GpuMemTotalMb is double t && t > 0 && t <= 48 * 1024d) totalGb = t / 1024d;
+        // la memoria condivisa di un'integrata è la RAM che può prendere, metà di quella del PC: niente tetto dei 48 GB
+        bool shared = _hw.GpuMemShared;
+        if (_hw.GpuMemTotalMb is double t && t > 0 && (shared || t <= 48 * 1024d)) totalGb = t / 1024d;
         if (_hw.GpuMemUsedMb is double u && u > 0) usedGb = u / 1024d;
 
         // Sanity check
         if (totalGb > 0 && usedGb > totalGb) usedGb = 0;
 
+        var label = shared ? "shared" : "VRAM";
         if (totalGb <= 0 && usedGb <= 0) return "";
         if (totalGb > 0 && usedGb > 0)
-            return $"VRAM {usedGb:F1} / {totalGb:F1} GB";
-        if (totalGb > 0) return $"VRAM ? / {totalGb:F1} GB";
-        return $"VRAM {usedGb:F1} GB";
+            return $"{label} {usedGb:F1} / {totalGb:F1} GB";
+        if (totalGb > 0) return $"{label} ? / {totalGb:F1} GB";
+        return $"{label} {usedGb:F1} GB";
     }
 
     // le parti della barra della RAM spiegate, poi la memoria impegnata e il file di paging (prima erano sigle nella riga)
@@ -294,22 +312,24 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             if (_hw.GpuLoadPercent is double gl) _metrics.GpuExternal = gl;
             if (_hw.GpuMemUsedMb is double gm && gm > 0) _metrics.VramUsedExternalGb = gm / 1024d;
 
-            double cpuMhz = (_hw.CpuClockMhz is double m && m > 0) ? m :
-                            (_metrics.CpuFreqMhz > 0 ? _metrics.CpuFreqMhz : 0);
+            // la frequenza misurata (il core più veloce, o la velocità media dei core al lavoro); senza, quella che dice Windows
+            bool measured = _hw.CpuClockMhz is double m && m > 0;
+            double cpuMhz = measured ? _hw.CpuClockMhz!.Value : (_metrics.CpuFreqMhz > 0 ? _metrics.CpuFreqMhz : 0);
             CpuClock.Text = cpuMhz > 0 ? $"{cpuMhz / 1000:0.00} GHz" : "";
+            CpuClock.ToolTip = !measured ? "Clock reported by Windows (the base clock on many processors)"
+                : _hw.CpuClockIsAverage ? "Average speed of the cores at work, as in Task Manager"
+                : "Clock of the fastest core";
             CpuPower.Text = _hw.CpuPowerW is double cpw && cpw > 0 ? $"{cpw:0.0}W" : "";
 
             if (_hw.CpuTempC is double t1 && t1 > 5)
             {
-                CpuTemp.Text = _hw.CpuTempFromWmi ? $"{t1:0}°C*" : $"{t1:0}°C";
-                CpuTemp.ToolTip = _hw.CpuTempFromWmi
-                    ? "Temperature from the WMI thermal zone (approximate).\nRun as administrator for the exact MSR reading."
-                    : null;
+                CpuTemp.Text = $"{t1:0}°C";
+                CpuTemp.ToolTip = null;
             }
             else
             {
                 CpuTemp.Text = "n/a";
-                CpuTemp.ToolTip = "CPU temperature not available.\nRun Pulse as administrator to enable it.";
+                CpuTemp.ToolTip = CpuSensorsHint();
             }
 
             GpuTemp.Text = _hw.GpuTempC is double t2 && t2 > 5 ? $"{t2:0}°C" : "";
@@ -319,7 +339,12 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             if (_hw.GpuClockMhz is double gc && gc > 0) gpuDetailParts.Add($"core {gc:0}MHz");
             if (_hw.GpuMemClockMhz is double mc && mc > 0) gpuDetailParts.Add($"mem {mc:0}MHz");
             if (_hw.GpuPowerW is double pw && pw > 0) gpuDetailParts.Add($"{pw:0.0}W");
+            // una GPU senza frequenze né consumo (l'integrata Intel senza PawnIO): al loro posto il nome, che dice quale si vede
+            if (gpuDetailParts.Count == 0 && !string.IsNullOrEmpty(_hw.GpuName)) gpuDetailParts.Add(ShortName(_hw.GpuName));
             GpuDetail.Text = string.Join("  •  ", gpuDetailParts);
+            GpuVram.ToolTip = _hw.GpuMemShared
+                ? "Integrated GPU: it has no memory of its own and uses the RAM it shares with the CPU (Task Manager's shared GPU memory)"
+                : null;
 
             NetPing.Text = _net.PingMs is double ms ? $"ping {ms:0} ms" : "";
             var netDetailParts = new List<string>();
