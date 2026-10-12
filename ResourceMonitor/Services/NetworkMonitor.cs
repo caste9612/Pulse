@@ -15,6 +15,17 @@ public sealed partial class NetworkMonitor
     private DateTime _lastPublicIpFetch = DateTime.MinValue;
     private DateTime _lastWifiCheck = DateTime.MinValue;
 
+    // la scheda attiva (nome, tipo, IP locale) cambia di rado: si rilegge quando Windows avvisa che gli indirizzi sono cambiati
+    // (cavo, Wi-Fi, VPN) e comunque ogni minuto. GetAllNetworkInterfaces enumera anche i filtri e le schede virtuali: 30 ms ogni
+    // volta su un PC con 65 interfacce (Hyper-V, WSL, VPN), prima ogni 2 secondi (12/10/2026)
+    private volatile bool _addressesChanged = true;
+    private DateTime _lastAdapterScan = DateTime.MinValue;
+
+    public NetworkMonitor()
+    {
+        NetworkChange.NetworkAddressChanged += (_, _) => _addressesChanged = true;
+    }
+
     public string? LocalIp { get; private set; }
     public string? PublicIp { get; private set; }
     public string? AdapterName { get; private set; }
@@ -28,7 +39,12 @@ public sealed partial class NetworkMonitor
         // Sposta tutto il lavoro sincrono potenzialmente lento (netsh, enum interfaces) su un thread di background.
         await Task.Run(() =>
         {
-            UpdateLocalAdapter();
+            if (_addressesChanged || DateTime.UtcNow - _lastAdapterScan > TimeSpan.FromMinutes(1))
+            {
+                _addressesChanged = false;
+                _lastAdapterScan = DateTime.UtcNow;
+                UpdateLocalAdapter();
+            }
             // nome della rete e segnale servono solo quando la connessione attiva è Wi-Fi: via cavo niente netsh (era un processo
             // ogni 8 secondi, 31 ms di CPU ciascuno, per niente); in Wi-Fi ogni 30 secondi, il nome cambia di rado
             if (AdapterType != "Wi-Fi")
@@ -101,7 +117,10 @@ public sealed partial class NetworkMonitor
             p.WaitForExit(800);
 
             var ssidMatch = SsidRegex().Match(output);
+            // netsh traduce le etichette ("Segnale" su un Windows in italiano): senza "Signal" il segnale è la riga che finisce con
+            // una percentuale, l'unica dell'elenco
             var signalMatch = SignalRegex().Match(output);
+            if (!signalMatch.Success) signalMatch = PercentLineRegex().Match(output);
 
             if (ssidMatch.Success)
             {
@@ -144,4 +163,7 @@ public sealed partial class NetworkMonitor
 
     [GeneratedRegex(@"Signal\s*:\s*(\d+)\s*%", RegexOptions.Multiline | RegexOptions.CultureInvariant)]
     private static partial Regex SignalRegex();
+
+    [GeneratedRegex(@"^[^:\r\n]+:\s*(\d+)\s*%\s*$", RegexOptions.Multiline | RegexOptions.CultureInvariant)]
+    private static partial Regex PercentLineRegex();
 }
