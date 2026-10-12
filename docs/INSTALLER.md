@@ -9,7 +9,7 @@ What `Setup-Pulse-vX.Y.Z.exe` does and how it works.
 3. Accept license (MIT)
 4. Choose options:
    - ☐ Start with Windows (regular user privileges)
-   - ☐ **Start with administrator privileges** (uses Scheduled Task — no UAC at login, enables CPU temp/power on systems with signed MSR driver)
+   - ☐ **Start with administrator privileges** (uses Scheduled Task — no UAC at login, enables CPU temp/power on systems with the PawnIO driver installed)
    - ☑ **Restart Pulse if it closes because of an error** (ticked by default; a second Scheduled Task, see [Restart after a crash](#restart-after-a-crash))
    - ☐ Create desktop shortcut
 5. Click Install → files copied
@@ -90,7 +90,7 @@ Setup-Pulse-vX.Y.Z.exe (~6 MB)
 ├── LICENSE
 ├── licenses/                     (SIL OFL of the embedded fonts + README)
 ├── README.md
-├── docs/HARDWARE-SUPPORT.md      (so users know about Ryzen Master / HWiNFO64)
+├── docs/HARDWARE-SUPPORT.md      (so users know about the PawnIO driver)
 └── unins000.exe                  (Inno Setup uninstaller)
 ```
 

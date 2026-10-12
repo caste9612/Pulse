@@ -73,17 +73,24 @@ ResourceMonitor/                   namespace ResourceMonitor, assembly Pulse
 │
 ├── Services/
 │   ├── MetricsService.cs          1s tick: CPU/RAM/Disk/Net via Win32 native
-│   ├── NativeMetrics.cs           Win32 P/Invoke (GetSystemTimes, GetIfTable2, ...)
+│   ├── NativeMetrics.cs           Win32 P/Invoke (GetSystemTimes, GetIfEntry2, ...)
+│   ├── CoreSampler.cs             which process runs on which core (ETW sampling, admin)
 │   ├── HardwareMonitor.cs         2s tick: LHM wrapper (temps/clocks/watts)
+│   ├── NvidiaGpu.cs               NVIDIA GPUs read directly with NVML
+│   ├── CpuSpeed.cs                average CPU speed without MSR clocks (PerfLib V2)
+│   ├── GpuWatch.cs                display adapter changes → restart
 │   ├── ProcessMonitor.cs          5s tick: top processes by CPU/RAM
 │   ├── NetworkMonitor.cs          2s tick: ping, IPs, Wi-Fi
 │   ├── DriveMonitor.cs            30s tick: free space per drive
 │   ├── TrayIcon.cs                tray icon via Shell_NotifyIconW (no WinForms)
+│   ├── AdminStart.cs              unelevated start → the installer's elevated task
 │   ├── SettingsService.cs         JSON load/save (%APPDATA%)
 │   └── PerfLog.cs                 logs slow ticks (debug)
 │
 ├── Controls/
-│   └── Sparkline.cs               custom-render sparkline chart
+│   ├── Sparkline.cs               custom-render sparkline chart
+│   ├── CoreBars.cs                one bar per logical processor
+│   └── MemoryBar.cs               RAM composition bar
 │
 └── Resources/
     └── app.ico                    multi-resolution icon (scripts/generate-icon.ps1)
@@ -107,7 +114,7 @@ Usage:
 ./measure-deep.ps1 -ExePath .\dist\Pulse.exe -Label "baseline" -ClearCache
 ```
 
-`-ExePath` defaults to a path on the author's PC, so pass it. `measure.ps1`, the shorter v1.0 script (30 s CPU sample, `perf-history.csv`), predates the rename to `Pulse.exe`: it still stops `ResourceMonitor` processes and looks for a "Resource Monitor" window.
+`-ExePath` defaults to a path on the author's PC, so pass it. On a PC with an Intel integrated GPU the working set of a newly built exe is about 80 MB higher in its first runs (the Intel driver compiles WPF's shaders for a new executable, then reuses them): compare working sets after a couple of runs; private memory is not affected. `measure.ps1`, the shorter v1.0 script (30 s CPU sample, `perf-history.csv`), predates the rename to `Pulse.exe`: it still stops `ResourceMonitor` processes and looks for a "Resource Monitor" window.
 
 History from refactoring (Ryzen 9 7950X reference):
 
@@ -122,7 +129,7 @@ History from refactoring (Ryzen 9 7950X reference):
 
 ## Seeing the sensors LHM exposes
 
-To see what LibreHardwareMonitorLib exposes on a new system, run the LibreHardwareMonitor app as admin: it is built on the same library (ideally take the release matching the `LibreHardwareMonitorLib` version in `ResourceMonitor.csproj`). Look for non-zero values and copy any new sensor names to the filters in `HardwareMonitor.Update()`.
+To see what LibreHardwareMonitorLib exposes on a new system, run the LibreHardwareMonitor app as admin, with the PawnIO driver installed (without it the CPU temperatures, powers and clocks stay empty): it is built on the same library (ideally take the release matching the `LibreHardwareMonitorLib` version in `ResourceMonitor.csproj`). Look for non-zero values and copy any new sensor names to the filters in `HardwareMonitor.Update()`.
 
 Useful when adding support for new CPU generations.
 

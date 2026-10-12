@@ -65,6 +65,18 @@ v1.3.0 reads NVIDIA GPUs directly with NVML instead of LibreHardwareMonitor's 41
 
 Hidden in the tray the widget draws nothing, so that row is the data collection alone: about one point of a core less, what NVML saves every two seconds. With the widget visible part of it goes to the new core and memory bars. The compositor rows are the noisiest (other windows on screen move them too), but they went down in both rounds: the window without `WindowChrome` costs Windows less.
 
+### v1.3.1: a PC without a graphics card
+
+v1.3.1 was checked on a second PC, the opposite of the reference one: Intel Core i9-11900K with only its integrated UHD Graphics 750, Windows 11 in Italian, Hyper-V, WSL and a VPN (64 network interfaces). There v1.3.0 showed the GPU at 0% and the CPU at 3.50 GHz at all times; v1.3.1 shows the integrated GPU and the real CPU speed, and reads the network with less work on the UI thread. Measured on 12/10/2026 with the PC idle, same 436 × 551 window, v1.3.0 and v1.3.1 alternated in two 45 s rounds (not elevated; another PC, so compare within this table only):
+
+| Metric | v1.3.0 | v1.3.1 |
+|---|---|---|
+| CPU, widget visible | 3.13% of one core | **2.87%** (within the noise) |
+| 1 s tick on the UI thread | ~4 ms, peaks over 100 ms | **~1 ms** |
+| Private memory | ~100 MB | ~100 MB |
+| GPU | 0%: the integrated GPU was not read | the busiest D3D engine, as in Task Manager |
+| CPU clock | 3.50 GHz, the base clock, at all times | 2.5–3.0 GHz at rest, 4.6 GHz under load |
+
 ### How we got here (the things that matter)
 
 1. **No PerformanceCounter** — every metric is read via direct Win32 P/Invoke (`GetSystemTimes`, `GetPerformanceInfo`, `GetIfTable2`, `NtQuerySystemInformation`, `CallNtPowerInformation`). Each tick is ~5 ms instead of the ~45 ms it would cost using `PerformanceCounter`/PDH.
@@ -79,9 +91,9 @@ A full performance log lives in `%TEMP%\pulse-perf.log`: any tick that exceeds 5
 
 ## Features
 
-- **CPU**: usage %, current clock (GHz), temperature, power (W) — see "Running as administrator" below; under the graph one bar per logical processor (threads of the same core side by side) and the load counted in full cores, to see how parallel the work is; as administrator the bars also show, in colour, how much of each core the busiest processes of *Top CPU* take (up to three, from half a core up)
+- **CPU**: usage %, current clock (GHz: the fastest core's with the MSR sensors, otherwise the average speed of the cores at work, as in Task Manager), temperature, power (W) — see "Running as administrator" below; under the graph one bar per logical processor (threads of the same core side by side) and the load counted in full cores, to see how parallel the work is; as administrator the bars also show, in colour, how much of each core the busiest processes of *Top CPU* take (up to three, from half a core up)
 - **RAM**: usage %, used/total GB, available GB and, under the graph, the composition bar of Task Manager (in use, modified, cached, free); the tooltip explains each part and adds committed memory and page file usage
-- **GPU**: usage %, VRAM used/total, temperature, core/memory clocks, power (W)
+- **GPU**: usage %, VRAM used/total, temperature, core/memory clocks, power (W); on a PC without a graphics card the integrated GPU, with the load of its busiest engine (as in Task Manager) and the memory it shares with the CPU
 - **Network**: ↓/↑ throughput, Wi-Fi SSID/signal, local IP, public IP, ping to 8.8.8.8
 - **Disk**: total ↓/↑ throughput, per-drive free space + bar, SSD temp (when LHM Storage is enabled)
 - **Top processes**: top 6 by CPU (those above half a core with their colour in the core bars, the load in cores in the tooltip) and by RAM, updated every 5 s. Right-click on a process for: *Open file location* · *Properties* · *End process* · *Search online*
@@ -92,12 +104,15 @@ A full performance log lives in `%TEMP%\pulse-perf.log`: any tick that exceeds 5
 
 ## Running as administrator (important)
 
-**This is the single most impactful setting.** Several CPU sensors live in Model-Specific Registers (MSRs) which only kernel mode can read. Without admin privileges Pulse cannot show:
+**This is the single most impactful setting.** Several CPU sensors live in Model-Specific Registers (MSRs) which only kernel mode can read, through a driver: the PawnIO driver, installed once (see [below](#why-admin-alone-isnt-enough-pawnio)). Without admin privileges and PawnIO Pulse cannot show:
 
 - CPU temperature (per-core and package)
 - CPU package power (W)
-- Accurate per-core clock frequency
-- Which process runs on which core (the colours in the core bars): the kernel sampling session needs elevation too
+- The clock of the fastest core (Pulse shows the average speed of the cores at work instead, as Task Manager does)
+
+And without admin privileges alone:
+
+- Which process runs on which core (the colours in the core bars): the kernel sampling session needs elevation, not PawnIO
 
 Everything else (CPU/RAM/GPU usage, GPU temp/power, network, disk, top processes) works fine without elevation — these don't need MSR access.
 
@@ -118,13 +133,15 @@ A third checkbox, ticked by default, **restarts Pulse if it closes because of an
 
 The Scheduled Tasks are removed when you uninstall Pulse.
 
-### Why admin alone isn't always enough
+### Why admin alone isn't enough: PawnIO
 
-Modern Windows 11 ships with **VBS** (Virtualization-Based Security) and **HVCI** (Hypervisor-protected Code Integrity) enabled. These features sandbox the kernel and can block older Ring-0 drivers — including the one LibreHardwareMonitor uses by default.
+Reading MSRs takes a kernel driver, and LibreHardwareMonitor, the library Pulse reads the CPU sensors with, no longer brings one of its own: version 0.9.6 uses only **PawnIO**, a signed driver installed separately, once, from [pawnio.eu](https://pawnio.eu) or with:
 
-If you have **AMD Ryzen Master** installed, its driver (`AMDRyzenMasterDriverV31.sys`) is loaded as a permanent Windows service and is signed by AMD, so it passes VBS without complaints. Pulse detects this driver and uses it — *no extra installation, no manual configuration*.
+```powershell
+winget install namazso.PawnIO
+```
 
-If you have an **Intel CPU**, for now Pulse relies on the LHM library's own driver, which may be blocked under VBS (CPU temp/power then show "n/a"). HWiNFO64 (free for personal use) has a driver signed via newer Microsoft attestation that passes VBS: future Pulse versions will read directly from HWiNFO64's shared memory, but today installing it doesn't change what Pulse shows.
+Without it the CPU temperature reads `n/a` and the CPU power is missing even with Pulse running as administrator, on Intel and AMD alike. The tooltip on `n/a` says what is missing: the driver, the rights or both.
 
 See [`docs/HARDWARE-SUPPORT.md`](docs/HARDWARE-SUPPORT.md) for the full breakdown per CPU family.
 
@@ -134,28 +151,23 @@ See [`docs/HARDWARE-SUPPORT.md`](docs/HARDWARE-SUPPORT.md) for the full breakdow
 
 Download the latest `Setup-Pulse-vX.Y.Z.exe` from the [Releases page](../../releases). The installer offers:
 
-- ☑ Start with Windows (login)
-- ☑ **Start with administrator privileges** (see section above — enables CPU temp/power on supported hardware)
-- ☑ Create desktop shortcut
+- ☐ Start with Windows (login)
+- ☐ **Start with administrator privileges** (see section above — with the PawnIO driver, enables CPU temp/power)
+- ☑ Restart Pulse if it closes because of an error (ticked by default)
+- ☐ Create desktop shortcut
 
 Inno Setup detects an existing Pulse install via its `AppId` and **upgrades in place without losing settings** (settings live in `%APPDATA%\Pulse\settings.json` and are preserved across uninstall/reinstall).
 
 ### Option B — Portable build
 
-Grab `Pulse-vX.Y.Z-portable.zip` from Releases, extract anywhere, and run `Pulse.exe`. Settings are stored in `%APPDATA%\Pulse\settings.json`. To enable CPU temp/power in portable mode you have to launch the exe manually with *Run as administrator* every time.
+Grab `Pulse-vX.Y.Z-portable.zip` from Releases, extract anywhere, and run `Pulse.exe`. Settings are stored in `%APPDATA%\Pulse\settings.json`. To enable CPU temp/power in portable mode you have to install PawnIO and launch the exe manually with *Run as administrator* every time.
 
 ## Hardware requirements
 
 - Windows 10 / 11 (x64); the Mica and Acrylic transparency needs Windows 11 22H2 or later (elsewhere the widget is opaque)
 - .NET 9 Desktop Runtime ([download](https://dotnet.microsoft.com/download/dotnet/9.0))
 
-Optional, to unlock CPU temperature / power:
-
-| System | What you need | Works under VBS / HVCI |
-|---|---|---|
-| AMD Ryzen | Install [AMD Ryzen Master](https://www.amd.com/en/products/processors/ryzen-master.html) → its signed driver stays loaded as a Windows service | ✅ Yes |
-| Intel Core (Gen 8–14) | Nothing to install for now: LHM's own driver, with admin rights ([HWiNFO64](https://www.hwinfo.com) support is planned) | ⚠️ May be blocked |
-| No supported tool installed | CPU temp/power show as `n/a`, everything else still works | ✅ |
+Optional, to unlock CPU temperature / power (Intel and AMD): the [PawnIO](https://pawnio.eu) driver (`winget install namazso.PawnIO`) and Pulse running as administrator, best through the installer's *Start with administrator privileges*. Without them CPU temp/power show as `n/a` and the clock is the average speed of the cores; everything else still works.
 
 ## Tray menu
 
@@ -166,7 +178,7 @@ Right-click the tray icon (near the clock) for:
 - Appearance... — accent colour, transparency, fill and density, applied live
 - Always on top — pin toggle
 - Start with Windows — autostart (regular user privileges)
-- Restart as administrator — re-launch elevated, enables MSR sensors and the process colours in the core bars (only shown when not already admin)
+- Restart as administrator — re-launch elevated, enables the process colours in the core bars and, with PawnIO installed, the MSR sensors (only shown when not already admin)
 - Exit
 
 ## SmartScreen warning when downloading
@@ -197,6 +209,7 @@ MainWindow (WPF + Reticle UI, Mica backdrop)
    ├── MetricsService    (1 s : CPU/RAM/Disk/Net via Win32 native)
    ├── NativeMetrics     (P/Invoke: GetSystemTimes, GetIfTable2, ...)
    ├── HardwareMonitor   (2 s : LibreHardwareMonitorLib — temps/clocks/watts)
+   ├── CpuSpeed          (2 s : average CPU speed via PerfLib V2, when there are no MSR clocks)
    ├── ProcessMonitor    (5 s : top processes via Process.GetProcesses)
    ├── NetworkMonitor    (2 s : ping, IPs, SSID via netsh)
    ├── DriveMonitor      (30 s: DriveInfo.GetDrives)
