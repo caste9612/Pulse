@@ -34,7 +34,10 @@ public sealed class CoreSampler : IDisposable
     private readonly uint _previousInterval;
     private ulong _trace = InvalidTrace;
     private Thread? _thread;
-    private volatile int[] _tracked = { -1, -1, -1 };
+    // il colore di ogni processo seguito: un programma è fatto di più processi, tutti con lo stesso colore. Il dizionario non
+    // cambia dopo che è stato pubblicato: Track ne mette uno nuovo, il thread di ETW legge quello che trova
+    private volatile Dictionary<int, int> _slotOf = new();
+    private string?[] _trackedNames = new string?[Slots];
     private int[] _counts;
     private int[] _previous;
     private int _disposed;
@@ -142,14 +145,24 @@ public sealed class CoreSampler : IDisposable
         return sampler;
     }
 
-    /// <summary>I processi da seguire, uno per colore (-1 = colore libero).</summary>
-    public void Track(int[] pids)
+    /// <summary>I programmi da seguire, uno per colore: il nome (null = colore libero) e i processi che ne fanno parte.</summary>
+    public void Track(string?[] names, int[][] pids)
     {
-        var tracked = new int[Slots];
-        for (int i = 0; i < Slots; i++) tracked[i] = i < pids.Length ? pids[i] : -1;
-        // un colore passato a un altro processo non eredita i campioni del secondo prima
-        if (!tracked.AsSpan().SequenceEqual(_tracked)) _previous = new int[_cores * Columns];
-        _tracked = tracked;
+        var tracked = new string?[Slots];
+        var slotOf = new Dictionary<int, int>();
+        bool same = true;
+        for (int i = 0; i < Slots; i++)
+        {
+            tracked[i] = i < names.Length ? names[i] : null;
+            if (!string.Equals(tracked[i], _trackedNames[i], StringComparison.OrdinalIgnoreCase)) same = false;
+            if (tracked[i] is null || i >= pids.Length) continue;
+            foreach (int pid in pids[i]) if (pid > 0) slotOf[pid] = i;
+        }
+        // un colore passato a un altro programma non eredita i campioni del secondo prima; se è lo stesso programma con un processo
+        // in più o in meno, i campioni restano
+        if (!same) _previous = new int[_cores * Columns];
+        _trackedNames = tracked;
+        _slotOf = slotOf;
     }
 
     /// <summary>Per ogni core, la parte dei suoi campioni non idle di ciascun processo seguito (<see cref="Slots"/> valori per
@@ -228,7 +241,7 @@ public sealed class CoreSampler : IDisposable
                 int cpu = (flags & EVENT_HEADER_FLAG_PROCESSOR_INDEX) != 0 ? (ushort)Marshal.ReadInt16(record, 80) : Marshal.ReadByte(record, 80);
                 if (cpu >= _cores) return;
                 int pid = ProcessOf(tid);
-                int slot = pid < 0 ? -1 : Array.IndexOf(_tracked, pid);   // -1 nei colori liberi non è un processo
+                int slot = pid >= 0 && _slotOf.TryGetValue(pid, out int found) ? found : -1;
                 Volatile.Read(ref _counts)[cpu * Columns + (slot < 0 ? Slots : slot)]++;
             }
             else if (provider == ThreadGuid && Marshal.ReadByte(record, 42) >= 2 && length >= 8)

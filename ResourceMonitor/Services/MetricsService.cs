@@ -17,7 +17,8 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     private volatile CoreSampler? _sampler;
     private volatile bool _samplingFailed;
     private int _samplingSwitching;
-    private int[] _trackedPids = { -1, -1, -1 };
+    private string?[] _trackedNames = new string?[CoreSampler.Slots];
+    private int[][] _trackedPids = { Array.Empty<int>(), Array.Empty<int>(), Array.Empty<int>() };
 
     public double Cpu { get; private set; }
     public double[] CpuCores { get; private set; } = Array.Empty<double>();
@@ -34,6 +35,10 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     public bool CoreSamplingAvailable => _samplingPossible && !_samplingFailed;
     public double GpuExternal { get; set; }
     public double VramUsedExternalGb { get; set; }
+    /// <summary>Le temperature le legge HardwareMonitor ogni due secondi; qui entrano nella storia a ogni secondo, così nel
+    /// grafico corrono accanto al carico. NaN = non disponibile.</summary>
+    public double CpuTempExternal { get; set; } = double.NaN;
+    public double GpuTempExternal { get; set; } = double.NaN;
     public double RamUsedPercent { get; private set; }
     public double RamUsedGb { get; private set; }
     public double RamTotalGb { get; private set; }
@@ -59,8 +64,13 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     public Queue<double> CpuHistory { get; } = new(HistoryLength);
     public Queue<double> RamHistory { get; } = new(HistoryLength);
     public Queue<double> GpuHistory { get; } = new(HistoryLength);
-    public Queue<double> DiskHistory { get; } = new(HistoryLength);
-    public Queue<double> NetHistory { get; } = new(HistoryLength);
+    // rete e disco: entrata e uscita separate, in byte al secondo (il grafico le mostra a specchio)
+    public Queue<double> DiskReadHistory { get; } = new(HistoryLength);
+    public Queue<double> DiskWriteHistory { get; } = new(HistoryLength);
+    public Queue<double> NetRecvHistory { get; } = new(HistoryLength);
+    public Queue<double> NetSentHistory { get; } = new(HistoryLength);
+    public Queue<double> CpuTempHistory { get; } = new(HistoryLength);
+    public Queue<double> GpuTempHistory { get; } = new(HistoryLength);
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public event EventHandler? Updated;
@@ -73,8 +83,12 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
             CpuHistory.Enqueue(0);
             RamHistory.Enqueue(0);
             GpuHistory.Enqueue(0);
-            DiskHistory.Enqueue(0);
-            NetHistory.Enqueue(0);
+            DiskReadHistory.Enqueue(0);
+            DiskWriteHistory.Enqueue(0);
+            NetRecvHistory.Enqueue(0);
+            NetSentHistory.Enqueue(0);
+            CpuTempHistory.Enqueue(double.NaN);
+            GpuTempHistory.Enqueue(double.NaN);
         }
 
         // Prime CPU baseline (la prima chiamata ritorna 0)
@@ -134,12 +148,10 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
             var diskRates = _native.GetDiskRates();
             DiskReadBytesPerSec = diskRates.ReadBytesPerSec;
             DiskWriteBytesPerSec = diskRates.WriteBytesPerSec;
-            double diskBps = diskRates.ReadBytesPerSec + diskRates.WriteBytesPerSec;
 
             var netRates = _native.GetNetworkRates();
             NetRecvBytesPerSec = netRates.ReceiveBytesPerSec;
             NetSentBytesPerSec = netRates.SendBytesPerSec;
-            double netBps = netRates.ReceiveBytesPerSec + netRates.SendBytesPerSec;
 
             Gpu = GpuExternal;
             VramUsedGb = VramUsedExternalGb;
@@ -147,8 +159,12 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
             PushHistory(CpuHistory, Cpu);
             PushHistory(RamHistory, RamUsedPercent);
             PushHistory(GpuHistory, Gpu);
-            PushHistory(DiskHistory, diskBps);
-            PushHistory(NetHistory, netBps);
+            PushHistory(DiskReadHistory, DiskReadBytesPerSec);
+            PushHistory(DiskWriteHistory, DiskWriteBytesPerSec);
+            PushHistory(NetRecvHistory, NetRecvBytesPerSec);
+            PushHistory(NetSentHistory, NetSentBytesPerSec);
+            PushHistory(CpuTempHistory, CpuTempExternal);
+            PushHistory(GpuTempHistory, GpuTempExternal);
 
             OnChanged(nameof(Cpu));
             OnChanged(nameof(RamUsedPercent));
@@ -182,11 +198,13 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
     private void OnChanged([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
-    /// <summary>I processi da seguire nel campionamento dei core, uno per colore (-1 = colore libero).</summary>
-    public void TrackProcesses(int[] pids)
+    /// <summary>I programmi da seguire nel campionamento dei core, uno per colore: il nome (null = colore libero) e i suoi
+    /// processi.</summary>
+    public void TrackProcesses(string?[] names, int[][] pids)
     {
-        _trackedPids = (int[])pids.Clone();
-        _sampler?.Track(_trackedPids);
+        _trackedNames = (string?[])names.Clone();
+        _trackedPids = (int[][])pids.Clone();
+        _sampler?.Track(_trackedNames, _trackedPids);
     }
 
     /// <summary>Accende o spegne il campionamento dei core. Aprire e chiudere la sessione del kernel prende qualche millisecondo
@@ -203,7 +221,7 @@ public sealed class MetricsService : INotifyPropertyChanged, IDisposable
                 {
                     var sampler = CoreSampler.TryStart(CpuCorePhysical.Length, out _);
                     if (sampler is null) { _samplingFailed = true; return; }   // il motivo è nel perf log
-                    sampler.Track(_trackedPids);
+                    sampler.Track(_trackedNames, _trackedPids);
                     _sampler = sampler;
                 }
                 else

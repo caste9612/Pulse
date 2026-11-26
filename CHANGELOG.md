@@ -5,6 +5,30 @@ All notable changes to Pulse will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.4.0] - 2026-11-26
+
+The panel redrawn: the same information, each piece in a fixed place. Nothing changes in what Pulse reads or how.
+
+### Changed
+- **A fixed column for the text**: every metric (CPU, RAM, GPU, NET, DSK) has the same left column, 168 units wide, and its graph takes the rest, so the five graphs start and end at the same place. In the column the label, the main value and the second value (temperature, GB in use) are right-aligned in columns of their own: a value that gets longer no longer pushes the ones after it. Under each metric there is one detail line, always in the same spot: "≈ 1.5 cores · 4.50 GHz · 65 W", "47.9 GB available of 63.1 GB", "VRAM 2.7 / 15.9 GB · 43 W", "Ethernet · ping 21 ms", "SSD 41°C". Until v1.3.0 the values followed one another on a row and the details were spread on both sides of it.
+- **Network and disk rates one above the other**, in on top (↓) and out below (↑), in the size of the second values; the Wi-Fi name and the addresses moved under the network graph.
+- ***Top CPU* and *Top RAM* list programs, not processes**: the processes with the same name are added up, with their number next to the name ("chrome ×21"). A browser or an editor is dozens of processes, and one at a time they never showed their real weight; the same name no longer fills three rows either. The memory is the sum of the working sets, and the tooltip says that what the processes share counts more than once. In the right-click menu *Open file location* and *Properties* are those of the heaviest process of the program, and *End* closes them all: the menu item and the confirmation say how many, and a process ID that has passed to another program in the meantime is left alone.
+- **The colours in the core bars follow the programs**: from half a core up, as before, a program of *Top CPU* gets a colour and brings all its processes into it (the kernel sampling maps each of them to the colour of its program).
+- **The GPU clocks are in the tooltip** of the GPU row, no longer in view; VRAM and power stay on the detail line.
+- **The drive bars are the same length**: the "free of" texts share one column, as wide as the longest.
+- **Fit button**: 422 × 568 on the reference PC (446 × 557 in v1.3.0). The text column is 168 units by construction, so only the header and the address line are still measured at their longest text. A v1.3.0 widget at its fitted height shows a scroll bar until *Fit* is pressed again (11 units more); the space between the metrics went from 7 to 6 to keep the difference small.
+
+### Added
+- **The level behind the text**: behind the label and the values of each metric the series colour spreads from the left in proportion to the value, light enough to read the text over it and solid only along the bottom edge, and a small tick marks the highest value of the last minute. For CPU, RAM and GPU the scale is 0 to 100 %; network and disk have one level per direction on a logarithmic scale from 1 KB/s to 1 GB/s, so small traffic shows too (the graph next to it has the linear scale), and their tick is a short dash on the bottom edge: in rows half as high a taller one would end up over the digits. `Controls/LevelTint.cs`.
+- **Network and disk graphs mirrored**: in (downloaded, read) above the middle line, out (uploaded, written) below, until now one curve with the sum of the two. The scale is written in the corner of the graph: the smallest round one (100, 200, 500 KB/s, 1, 2, 5 MB/s … 10 GB/s) that holds the highest value of the minute, which so takes at least two fifths of the height. It never goes below 100 KB/s: a quiet minute stays flat instead of being stretched to the full height. Straight lines from one second to the next. `Controls/MirrorSpark.cs`.
+- **Temperature in the CPU and GPU graphs**: a thin line in the temperature colour on the same 0 to 100 scale as the load (°C), from the readings of the last minute; broken where there is no reading, absent when the sensor isn't available.
+- **Time grid and ruler**: a vertical line every ten seconds in the five graphs, and under the last one the ruler ("50 s" … "now"), which holds for all five.
+- **VRAM bar** under the GPU graph, next to its detail line, like the core bars under the CPU graph and the memory bar under the RAM one.
+- **Weight bars in *Top CPU* and *Top RAM***: behind each row a bar in the series colour, relative to the first row; for the CPU the scale reaches at least 4 %, so with the PC idle the rows don't fill up for a tenth of a point.
+
+### Removed
+- The ruler line between the drives and *Top CPU* / *Top RAM*.
+
 ## [v1.3.0] - 2026-10-11
 
 ### Added

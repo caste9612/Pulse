@@ -79,12 +79,13 @@ A full performance log lives in `%TEMP%\pulse-perf.log`: any tick that exceeds 5
 
 ## Features
 
-- **CPU**: usage %, current clock (GHz), temperature, power (W) — see "Running as administrator" below; under the graph one bar per logical processor (threads of the same core side by side) and the load counted in full cores, to see how parallel the work is; as administrator the bars also show, in colour, how much of each core the busiest processes of *Top CPU* take (up to three, from half a core up)
+- **One layout for every metric** (from v1.4.0): label, value and second value in a fixed column, right-aligned, so nothing moves when a number gets longer and the five graphs line up; one detail line under each. Behind the text, the level of the moment in the series colour, with a tick on the highest value of the last minute; in the graphs a line every ten seconds, with the time ruler under the last one
+- **CPU**: usage %, current clock (GHz), temperature (also a thin line in the graph), power (W) — see "Running as administrator" below; under the graph one bar per logical processor (threads of the same core side by side) and the load counted in full cores, to see how parallel the work is; as administrator the bars also show, in colour, how much of each core the busiest programs of *Top CPU* take (up to three, from half a core up)
 - **RAM**: usage %, used/total GB, available GB and, under the graph, the composition bar of Task Manager (in use, modified, cached, free); the tooltip explains each part and adds committed memory and page file usage
-- **GPU**: usage %, VRAM used/total, temperature, core/memory clocks, power (W)
-- **Network**: ↓/↑ throughput, Wi-Fi SSID/signal, local IP, public IP, ping to 8.8.8.8
-- **Disk**: total ↓/↑ throughput, per-drive free space + bar, SSD temp (when LHM Storage is enabled)
-- **Top processes**: top 6 by CPU (those above half a core with their colour in the core bars, the load in cores in the tooltip) and by RAM, updated every 5 s. Right-click on a process for: *Open file location* · *Properties* · *End process* · *Search online*
+- **GPU**: usage %, temperature (also a thin line in the graph), VRAM used/total with its bar under the graph, power (W); core and memory clocks in the tooltip
+- **Network**: ↓/↑ throughput one above the other, with a mirrored graph (in above the middle line, out below) on a round scale written in its corner (100, 200, 500 KB/s, 1 MB/s, …: the smallest that holds the highest value of the minute); adapter type, ping to 8.8.8.8, Wi-Fi SSID/signal, local IP, public IP
+- **Disk**: total ↓/↑ throughput with the same mirrored graph, per-drive free space + bar, SSD temp (when LHM Storage is enabled)
+- **Top programs**: top 6 by CPU and by RAM, updated every 5 s, the processes with the same name added up and counted ("chrome ×21"), each row with a bar for its weight; those above half a core with their colour in the core bars, the load in cores in the tooltip. Right-click on a row for: *Open file location* · *Properties* · *End process* (all the processes of the program, after a confirmation that says how many) · *Search online*
 - **System**: uptime, estimated total PC power draw (W)
 - **Fit button** in the header: the widget takes the smallest size that shows everything, with no scroll bar and no value cut, even at its longest
 - **Corner button** next to the pin: a click opens four arrows, and the chosen one sends the widget to that corner of its screen, 12 units from the edges and never over the taskbar

@@ -15,13 +15,19 @@
         Background="Transparent">
 
     <!-- Pattern Widget di Reticle (05-pattern.md §14): cornice senza tick, riga di testa da 32,
-         sezioni con Panel e Ruler, densità compatta. Niente AllowsTransparency né ombra: il fondo è il backdrop di Windows. -->
+         sezioni con Panel e Ruler, densità compatta. Niente AllowsTransparency né ombra: il fondo è il backdrop di Windows.
+
+         Ogni metrica è una griglia con le stesse tre colonne: 168 per il testo, 12 di stacco, il resto per il grafico. Il testo
+         non decide più dove comincia il grafico: i cinque grafici sono larghi uguale e lo stesso secondo cade alla stessa x.
+         Dentro i 168: sigla (38), valore allineato a destra (70), valore secondario allineato a destra (60). -->
     <rt:ReticleWindow.Resources>
         <!-- colori di serie: categorie, non stati. CPU info, GPU success, NET warning, DSK danger vengono dal tema;
              RAM viola e temperature ambra non seguono l'accento: qui i valori del tema scuro, UpdateSeriesBrushes li scurisce sul chiaro -->
         <SolidColorBrush x:Key="RamBrush" Color="#B987F7"/>
         <SolidColorBrush x:Key="TempBrush" Color="#FF8A1F"/>
-        <!-- i tre processi di Top CPU seguiti nelle barre dei core: tinte che il widget non usa già (rosa, lime, pervinca), lontane
+        <!-- le righe della griglia del tempo nei grafici: il colore del testo, appena accennato (UpdateSeriesBrushes lo rifà col tema) -->
+        <SolidColorBrush x:Key="GridLineBrush" Color="#12E9EDEE"/>
+        <!-- i tre programmi di Top CPU seguiti nelle barre dei core: tinte che il widget non usa già (rosa, lime, pervinca), lontane
              dal ciano della CPU; sul chiaro UpdateSeriesBrushes le scurisce -->
         <SolidColorBrush x:Key="ProcessBrush0" Color="#FF6EB4"/>
         <SolidColorBrush x:Key="ProcessBrush1" Color="#B8E55C"/>
@@ -29,18 +35,26 @@
 
         <Style x:Key="SectionLabel" TargetType="rt:TrackedText" BasedOn="{StaticResource Reticle.Tracked.Label}">
             <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Margin" Value="0,0,8,0"/>
         </Style>
         <Style x:Key="BigValue" TargetType="TextBlock" BasedOn="{StaticResource Reticle.Text.DataCompact}">
             <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+        </Style>
+        <!-- il valore secondario (temperatura, GB in uso) e le due velocità di rete e disco: lo stesso carattere del valore, più piccolo -->
+        <Style x:Key="SecValue" TargetType="TextBlock" BasedOn="{StaticResource BigValue}">
+            <Setter Property="FontSize" Value="15"/>
         </Style>
         <Style x:Key="InfoText" TargetType="TextBlock" BasedOn="{StaticResource Reticle.Text.Small}">
-            <!-- contatori vivi in Small (GHz, VRAM, ping): cifre tabulari come chiede 02-token §5.3 -->
+            <!-- contatori vivi in Small (uptime, watt): cifre tabulari come chiede 02-token §5.3 -->
             <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
         <Style x:Key="DimText" TargetType="TextBlock" BasedOn="{StaticResource InfoText}">
             <Setter Property="Foreground" Value="{DynamicResource Reticle.Brush.Text.Muted}"/>
+        </Style>
+        <!-- la riga di dettaglio sotto ogni metrica: una sola, sempre nello stesso punto -->
+        <Style x:Key="DetailText" TargetType="TextBlock" BasedOn="{StaticResource DimText}">
+            <Setter Property="Margin" Value="0,4,0,0"/>
         </Style>
         <Style x:Key="ProcessName" TargetType="TextBlock" BasedOn="{StaticResource InfoText}">
             <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
@@ -52,15 +66,30 @@
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="Foreground" Value="{DynamicResource Reticle.Brush.Text.Secondary}"/>
         </Style>
-        <!-- griglia puntinata sotto le sparkline (D7) -->
+        <!-- la scala scritta nell'angolo del grafico e i tempi del righello -->
+        <Style x:Key="ScaleLabel" TargetType="TextBlock" BasedOn="{StaticResource Reticle.Text.Mono}">
+            <Setter Property="FontSize" Value="9.5"/>
+            <Setter Property="Foreground" Value="{DynamicResource Reticle.Brush.Text.Muted}"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
+            <Setter Property="Margin" Value="3,1,0,0"/>
+            <Setter Property="IsHitTestVisible" Value="False"/>
+        </Style>
+        <Style x:Key="RulerLabel" TargetType="TextBlock" BasedOn="{StaticResource ScaleLabel}">
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="Grid.ColumnSpan" Value="2"/>
+        </Style>
+        <!-- griglia puntinata sotto i grafici (D7) -->
         <Style x:Key="SparkBed" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource Reticle.Brush.Dots}"/>
-            <Setter Property="Margin" Value="14,2,0,2"/>
+            <Setter Property="Grid.Column" Value="2"/>
         </Style>
         <Style x:Key="MetricDivider" TargetType="Rectangle">
             <Setter Property="Height" Value="1"/>
             <Setter Property="Fill" Value="{DynamicResource Reticle.Brush.Line.Subtle}"/>
-            <Setter Property="Margin" Value="0,8"/>
+            <!-- 6 sopra e sotto: con 7 il contenuto era 576 e nel pannello da 573 di chi aggiorna dalla 1.3.0 compariva la barra di scorrimento -->
+            <Setter Property="Margin" Value="0,6"/>
         </Style>
 
         <ContextMenu x:Key="ProcessMenu" x:Shared="False"
@@ -68,21 +97,11 @@
             <MenuItem Header="Open file location" Click="ProcOpenFolder_Click" CommandParameter="{Binding}"/>
             <MenuItem Header="Properties" Click="ProcProperties_Click" CommandParameter="{Binding}"/>
             <Separator/>
-            <MenuItem Header="End process" Click="ProcKill_Click" CommandParameter="{Binding}"/>
+            <MenuItem Header="{Binding EndLabel}" Click="ProcKill_Click" CommandParameter="{Binding}"/>
             <Separator/>
             <MenuItem Header="Search online" Click="ProcSearch_Click" CommandParameter="{Binding}"/>
         </ContextMenu>
-        <DataTemplate x:Key="ProcessRowTemplate">
-            <Grid Margin="0,1,0,1" Background="Transparent" ContextMenu="{StaticResource ProcessMenu}">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Text="{Binding Name}" Style="{StaticResource ProcessName}"/>
-                <TextBlock Grid.Column="1" Text="{Binding Value}" Style="{StaticResource ProcessValue}" Margin="8,0,0,0"/>
-            </Grid>
-        </DataTemplate>
-        <!-- quadratino del colore del processo nelle barre dei core (Slot 0–2): trasparente se il processo non è seguito (-1),
+        <!-- quadratino del colore del programma nelle barre dei core (Slot 0–2): trasparente se non è seguito (-1),
              assente se il campionamento del kernel non è disponibile, cioè Pulse non è da amministratore (-2) -->
         <Style x:Key="ProcessSwatch" TargetType="Rectangle">
             <Setter Property="Width" Value="6"/>
@@ -105,17 +124,50 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
-        <!-- Top CPU: il quadratino del colore, la percentuale della CPU, lo stesso valore in core nel tooltip -->
+        <!-- una riga di Top CPU o Top RAM: dietro, il peso come istogramma (due colonne a stella, piena e vuota, dal dato); sopra,
+             il quadratino del colore (solo Top CPU), il nome con il numero dei processi, il valore -->
         <DataTemplate x:Key="CpuProcessRowTemplate">
             <Grid Margin="0,1,0,1" Background="Transparent" ContextMenu="{StaticResource ProcessMenu}" ToolTip="{Binding Tip}">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <Rectangle Style="{StaticResource ProcessSwatch}"/>
-                <TextBlock Grid.Column="1" Text="{Binding Name}" Style="{StaticResource ProcessName}"/>
-                <TextBlock Grid.Column="2" Text="{Binding Value}" Style="{StaticResource ProcessValue}" Margin="8,0,0,0"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="{Binding Fill}"/>
+                        <ColumnDefinition Width="{Binding Rest}"/>
+                    </Grid.ColumnDefinitions>
+                    <Rectangle Fill="{DynamicResource Reticle.Brush.Info}" Opacity="0.26"/>
+                </Grid>
+                <Grid Margin="2,0,2,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Rectangle Style="{StaticResource ProcessSwatch}"/>
+                    <TextBlock Grid.Column="1" Style="{StaticResource ProcessName}">
+                        <Run Text="{Binding Name, Mode=OneWay}"/><Run Text="{Binding Count, Mode=OneWay}" FontSize="10.5" Foreground="{DynamicResource Reticle.Brush.Text.Muted}"/>
+                    </TextBlock>
+                    <TextBlock Grid.Column="2" Text="{Binding Value}" Style="{StaticResource ProcessValue}" Margin="8,0,0,0"/>
+                </Grid>
+            </Grid>
+        </DataTemplate>
+        <DataTemplate x:Key="RamProcessRowTemplate">
+            <Grid Margin="0,1,0,1" Background="Transparent" ContextMenu="{StaticResource ProcessMenu}" ToolTip="{Binding Tip}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="{Binding Fill}"/>
+                        <ColumnDefinition Width="{Binding Rest}"/>
+                    </Grid.ColumnDefinitions>
+                    <Rectangle Fill="{DynamicResource RamBrush}" Opacity="0.26"/>
+                </Grid>
+                <Grid Margin="2,0,2,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Style="{StaticResource ProcessName}">
+                        <Run Text="{Binding Name, Mode=OneWay}"/><Run Text="{Binding Count, Mode=OneWay}" FontSize="10.5" Foreground="{DynamicResource Reticle.Brush.Text.Muted}"/>
+                    </TextBlock>
+                    <TextBlock Grid.Column="1" Text="{Binding Value}" Style="{StaticResource ProcessValue}" Margin="8,0,0,0"/>
+                </Grid>
             </Grid>
         </DataTemplate>
     </rt:ReticleWindow.Resources>
@@ -162,30 +214,40 @@
             <ScrollViewer x:Name="ContentScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,2">
                 <StackPanel x:Name="ContentPanel" Margin="12,4,12,12">
 
-                    <!-- CPU -->
+                    <!-- CPU: velatura, sigla, valore, temperatura; il grafico con la temperatura come linea; sotto, il dettaglio e i core -->
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="168"/>
+                            <ColumnDefinition Width="12"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="32"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <ctrl:LevelTint x:Name="CpuLevel" Margin="-4,0,-4,0"
+                                        Fill="{DynamicResource Reticle.Brush.Info}" Tick="{DynamicResource Reticle.Brush.Text.Primary}"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="38"/>
+                                <ColumnDefinition Width="70"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
                             <rt:TrackedText Text="CPU" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource Reticle.Brush.Info}"/>
-                            <TextBlock x:Name="CpuValue" Style="{StaticResource BigValue}" Text="—"/>
-                            <TextBlock x:Name="CpuClock" Style="{StaticResource InfoText}" Margin="10,0,0,0" Text=""/>
-                            <TextBlock x:Name="CpuPower" Style="{StaticResource InfoText}" Margin="10,0,0,0" Text=""/>
-                            <TextBlock x:Name="CpuTemp" Style="{StaticResource InfoText}" Margin="10,0,0,0" Foreground="{DynamicResource TempBrush}" Text=""/>
-                        </StackPanel>
-                        <Border Grid.Column="1" Style="{StaticResource SparkBed}">
-                            <ctrl:Sparkline x:Name="CpuSpark" Height="26" Stroke="{DynamicResource Reticle.Brush.Info}" MaxValue="100"/>
+                            <TextBlock x:Name="CpuValue" Grid.Column="1" Style="{StaticResource BigValue}" Text="—"/>
+                            <TextBlock x:Name="CpuTemp" Grid.Column="2" Style="{StaticResource SecValue}" Foreground="{DynamicResource TempBrush}" Text=""/>
+                        </Grid>
+                        <Border Style="{StaticResource SparkBed}">
+                            <Grid>
+                                <ctrl:Sparkline x:Name="CpuSpark" Stroke="{DynamicResource Reticle.Brush.Info}" MaxValue="100"
+                                                GridStep="10" GridBrush="{DynamicResource GridLineBrush}" TempStroke="{DynamicResource TempBrush}"/>
+                                <TextBlock Text="100" Style="{StaticResource ScaleLabel}"/>
+                            </Grid>
                         </Border>
-                        <!-- sotto il grafico il carico di ogni core logico, a strati nei colori dei processi seguiti quando c'è il
-                             campionamento del kernel; a sinistra quanti core pieni vale (ToolTip da MainWindow) -->
-                        <TextBlock x:Name="CpuCoresText" Grid.Row="1" Style="{StaticResource DimText}" Text=""/>
-                        <ctrl:CoreBars x:Name="CoreBars" Grid.Row="1" Grid.Column="1" Height="12" Margin="14,2,0,2"
+                        <!-- quanti core pieni vale il carico, il clock, i watt (ToolTip da MainWindow); accanto il carico di ogni core
+                             logico, a strati nei colori dei programmi seguiti quando c'è il campionamento del kernel -->
+                        <TextBlock x:Name="CpuDetail" Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource DetailText}" Text=""/>
+                        <ctrl:CoreBars x:Name="CoreBars" Grid.Row="1" Grid.Column="2" Height="12" Margin="0,4,0,0"
                                        Fill="{DynamicResource Reticle.Brush.Info}"/>
                     </Grid>
 
@@ -194,113 +256,217 @@
                     <!-- RAM -->
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="168"/>
+                            <ColumnDefinition Width="12"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="32"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <ctrl:LevelTint x:Name="RamLevel" Margin="-4,0,-4,0"
+                                        Fill="{DynamicResource RamBrush}" Tick="{DynamicResource Reticle.Brush.Text.Primary}"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="38"/>
+                                <ColumnDefinition Width="70"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
                             <rt:TrackedText Text="RAM" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource RamBrush}"/>
-                            <TextBlock x:Name="RamValue" Style="{StaticResource BigValue}" Text="—"/>
-                            <TextBlock x:Name="RamUsed" Style="{StaticResource InfoText}" Margin="10,0,0,0" Text=""/>
-                        </StackPanel>
-                        <Border Grid.Column="1" Style="{StaticResource SparkBed}">
-                            <ctrl:Sparkline x:Name="RamSpark" Height="26" Stroke="{DynamicResource RamBrush}" MaxValue="100"/>
+                            <TextBlock x:Name="RamValue" Grid.Column="1" Style="{StaticResource BigValue}" Text="—"/>
+                            <TextBlock x:Name="RamUsed" Grid.Column="2" Style="{StaticResource SecValue}" Foreground="{DynamicResource Reticle.Brush.Text.Secondary}" Text=""/>
+                        </Grid>
+                        <Border Style="{StaticResource SparkBed}">
+                            <ctrl:Sparkline x:Name="RamSpark" Stroke="{DynamicResource RamBrush}" MaxValue="100"
+                                            GridStep="10" GridBrush="{DynamicResource GridLineBrush}"/>
                         </Border>
-                        <!-- sotto il grafico la composizione della memoria come in Gestione attività, a sinistra quanta ne resta da
-                             usare; il dettaglio (le quattro parti, impegnata, file di paging) nel tooltip, da MainWindow -->
-                        <TextBlock x:Name="RamAvailableText" Grid.Row="1" Style="{StaticResource DimText}" Text="" Margin="0,0,0,2"/>
-                        <ctrl:MemoryBar x:Name="RamBar" Grid.Row="1" Grid.Column="1" Height="8" Margin="14,0,0,2" VerticalAlignment="Center"
+                        <!-- quanta ne resta da usare; accanto la composizione della memoria come in Gestione attività. Il dettaglio
+                             (le quattro parti, impegnata, file di paging) nel tooltip, da MainWindow -->
+                        <TextBlock x:Name="RamDetail" Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource DetailText}" Text=""/>
+                        <ctrl:MemoryBar x:Name="RamBar" Grid.Row="1" Grid.Column="2" Height="8" Margin="0,4,0,0" VerticalAlignment="Center"
                                         Fill="{DynamicResource RamBrush}"/>
                     </Grid>
 
                     <Rectangle Style="{StaticResource MetricDivider}"/>
 
-                    <!-- GPU -->
-                    <StackPanel>
-                        <Grid>
+                    <!-- GPU: i due clock stanno nel tooltip della riga (GpuHead), non più in vista -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="168"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="32"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <ctrl:LevelTint x:Name="GpuLevel" Margin="-4,0,-4,0"
+                                        Fill="{DynamicResource Reticle.Brush.Success}" Tick="{DynamicResource Reticle.Brush.Text.Primary}"/>
+                        <Grid x:Name="GpuHead" Background="Transparent">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="38"/>
+                                <ColumnDefinition Width="70"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <rt:TrackedText Text="GPU" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource Reticle.Brush.Success}"/>
-                                <TextBlock x:Name="GpuValue" Style="{StaticResource BigValue}" Text="—"/>
-                                <TextBlock x:Name="GpuVram" Style="{StaticResource InfoText}" Margin="10,0,0,0" Text=""/>
-                                <TextBlock x:Name="GpuTemp" Style="{StaticResource InfoText}" Margin="10,0,0,0" Foreground="{DynamicResource TempBrush}" Text=""/>
-                            </StackPanel>
-                            <Border Grid.Column="1" Style="{StaticResource SparkBed}">
-                                <ctrl:Sparkline x:Name="GpuSpark" Height="26" Stroke="{DynamicResource Reticle.Brush.Success}" MaxValue="100"/>
-                            </Border>
+                            <rt:TrackedText Text="GPU" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource Reticle.Brush.Success}"/>
+                            <TextBlock x:Name="GpuValue" Grid.Column="1" Style="{StaticResource BigValue}" Text="—"/>
+                            <TextBlock x:Name="GpuTemp" Grid.Column="2" Style="{StaticResource SecValue}" Foreground="{DynamicResource TempBrush}" Text=""/>
                         </Grid>
-                        <TextBlock x:Name="GpuDetail" Style="{StaticResource DimText}" Text="" Margin="0,0,0,2"/>
-                    </StackPanel>
+                        <Border Style="{StaticResource SparkBed}">
+                            <ctrl:Sparkline x:Name="GpuSpark" Stroke="{DynamicResource Reticle.Brush.Success}" MaxValue="100"
+                                            GridStep="10" GridBrush="{DynamicResource GridLineBrush}" TempStroke="{DynamicResource TempBrush}"/>
+                        </Border>
+                        <TextBlock x:Name="GpuDetail" Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource DetailText}" Text=""/>
+                        <ProgressBar x:Name="GpuVramBar" Grid.Row="1" Grid.Column="2" Maximum="100" Margin="0,4,0,0" VerticalAlignment="Center"
+                                     Foreground="{DynamicResource Reticle.Brush.Success}" Background="{DynamicResource Reticle.Brush.Line.Subtle}"/>
+                    </Grid>
 
                     <Rectangle Style="{StaticResource MetricDivider}"/>
 
-                    <!-- NET -->
-                    <StackPanel>
+                    <!-- NET: due velocità una sopra l'altra, le frecce in colonna e i numeri allineati a destra; due velature, entrata
+                         sopra e uscita sotto, che partono dopo la sigla e le frecce, con la tacca del massimo ridotta a un trattino sul
+                         bordo (in righe da 16 una tacca alta finirebbe sopra le cifre); il grafico a specchio con la scala scritta -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="168"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="32"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid Margin="38,0,-4,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition/>
+                                <RowDefinition/>
+                            </Grid.RowDefinitions>
+                            <ctrl:LevelTint x:Name="NetDownLevel" TickWidth="4" TickHeight="2" Margin="0,0,0,1"
+                                            Fill="{DynamicResource Reticle.Brush.Warning}" Tick="{DynamicResource Reticle.Brush.Text.Primary}"/>
+                            <ctrl:LevelTint x:Name="NetUpLevel" TickWidth="4" TickHeight="2" Grid.Row="1" Strength="0.6"
+                                            Fill="{DynamicResource Reticle.Brush.Warning}" Tick="{DynamicResource Reticle.Brush.Text.Primary}"/>
+                        </Grid>
                         <Grid>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="38"/>
+                                <ColumnDefinition Width="70"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <rt:TrackedText Text="NET" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource Reticle.Brush.Warning}"/>
-                                <TextBlock x:Name="NetValue" Style="{StaticResource BigValue}" Text="—"/>
-                                <TextBlock x:Name="NetPing" Style="{StaticResource InfoText}" Margin="10,0,0,0" Text=""/>
-                            </StackPanel>
-                            <Border Grid.Column="1" Style="{StaticResource SparkBed}">
-                                <ctrl:Sparkline x:Name="NetSpark" Height="26" AutoScale="True" Stroke="{DynamicResource Reticle.Brush.Warning}"/>
-                            </Border>
+                            <Grid.RowDefinitions>
+                                <RowDefinition/>
+                                <RowDefinition/>
+                            </Grid.RowDefinitions>
+                            <rt:TrackedText Grid.RowSpan="2" Text="NET" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource Reticle.Brush.Warning}"/>
+                            <TextBlock Style="{StaticResource SecValue}" Margin="0,0,1,0" Text="↓"/>
+                            <TextBlock x:Name="NetDown" Grid.ColumnSpan="2" Style="{StaticResource SecValue}" Text="—"/>
+                            <TextBlock Grid.Row="1" Style="{StaticResource SecValue}" Margin="0,0,1,0" Text="↑"/>
+                            <TextBlock x:Name="NetUp" Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource SecValue}" Text="—"/>
                         </Grid>
-                        <TextBlock x:Name="NetDetail" Style="{StaticResource DimText}" Text="" Margin="0,0,0,2"/>
-                    </StackPanel>
+                        <Border Style="{StaticResource SparkBed}">
+                            <Grid>
+                                <ctrl:MirrorSpark x:Name="NetSpark" Stroke="{DynamicResource Reticle.Brush.Warning}"
+                                                  GridStep="10" GridBrush="{DynamicResource GridLineBrush}"/>
+                                <TextBlock x:Name="NetScale" Style="{StaticResource ScaleLabel}"/>
+                            </Grid>
+                        </Border>
+                        <TextBlock x:Name="NetDetail" Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource DetailText}" Text=""/>
+                        <TextBlock x:Name="NetAddr" Grid.Row="1" Grid.Column="2" Style="{StaticResource DetailText}" TextTrimming="CharacterEllipsis" Text=""/>
+                    </Grid>
 
                     <Rectangle Style="{StaticResource MetricDivider}"/>
 
-                    <!-- DISK -->
-                    <StackPanel>
+                    <!-- DSK: come NET; sotto il grafico il righello del tempo, che vale per tutti e cinque -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="168"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="32"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid Margin="38,0,-4,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition/>
+                                <RowDefinition/>
+                            </Grid.RowDefinitions>
+                            <ctrl:LevelTint x:Name="DiskReadLevel" TickWidth="4" TickHeight="2" Margin="0,0,0,1"
+                                            Fill="{DynamicResource Reticle.Brush.Danger}" Tick="{DynamicResource Reticle.Brush.Text.Primary}"/>
+                            <ctrl:LevelTint x:Name="DiskWriteLevel" TickWidth="4" TickHeight="2" Grid.Row="1" Strength="0.6"
+                                            Fill="{DynamicResource Reticle.Brush.Danger}" Tick="{DynamicResource Reticle.Brush.Text.Primary}"/>
+                        </Grid>
                         <Grid>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="38"/>
+                                <ColumnDefinition Width="70"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <rt:TrackedText Text="DSK" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource Reticle.Brush.Danger}"/>
-                                <TextBlock x:Name="DiskValue" Style="{StaticResource BigValue}" Text="—"/>
-                                <TextBlock x:Name="DiskTemp" Style="{StaticResource InfoText}" Margin="10,0,0,0" Foreground="{DynamicResource TempBrush}" Text=""/>
-                            </StackPanel>
-                            <Border Grid.Column="1" Style="{StaticResource SparkBed}">
-                                <ctrl:Sparkline x:Name="DiskSpark" Height="26" AutoScale="True" Stroke="{DynamicResource Reticle.Brush.Danger}"/>
-                            </Border>
+                            <Grid.RowDefinitions>
+                                <RowDefinition/>
+                                <RowDefinition/>
+                            </Grid.RowDefinitions>
+                            <rt:TrackedText Grid.RowSpan="2" Text="DSK" Style="{StaticResource SectionLabel}" Foreground="{DynamicResource Reticle.Brush.Danger}"/>
+                            <TextBlock Style="{StaticResource SecValue}" Margin="0,0,1,0" Text="↓"/>
+                            <TextBlock x:Name="DiskRead" Grid.ColumnSpan="2" Style="{StaticResource SecValue}" Text="—"/>
+                            <TextBlock Grid.Row="1" Style="{StaticResource SecValue}" Margin="0,0,1,0" Text="↑"/>
+                            <TextBlock x:Name="DiskWrite" Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource SecValue}" Text="—"/>
                         </Grid>
-                        <ItemsControl x:Name="DriveList" Margin="0,4,0,2">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid Margin="0,1,0,1">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="28"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{Binding Name}" Style="{StaticResource InfoText}"/>
-                                        <ProgressBar Grid.Column="1" Value="{Binding UsedPercent}" Maximum="100" Margin="0,0,8,0" VerticalAlignment="Center"
-                                                     Foreground="{DynamicResource Reticle.Brush.Danger}" Background="{DynamicResource Reticle.Brush.Line.Subtle}"/>
-                                        <TextBlock Grid.Column="2" Text="{Binding Caption}" Style="{StaticResource ProcessValue}"/>
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
+                        <Border Style="{StaticResource SparkBed}">
+                            <Grid>
+                                <ctrl:MirrorSpark x:Name="DiskSpark" Stroke="{DynamicResource Reticle.Brush.Danger}"
+                                                  GridStep="10" GridBrush="{DynamicResource GridLineBrush}"/>
+                                <TextBlock x:Name="DiskScale" Style="{StaticResource ScaleLabel}"/>
+                            </Grid>
+                        </Border>
+                        <TextBlock x:Name="DiskTemp" Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource DetailText}" Foreground="{DynamicResource TempBrush}" Text=""/>
+                        <!-- il righello: 59 parti come i 59 passi tra i 60 campioni (4 + 11 × 5), così ogni tempo sta a cavallo della sua
+                             riga della griglia: 50 s dopo 9 parti, poi ogni 10 -->
+                        <Grid x:Name="TimeRuler" Grid.Row="1" Grid.Column="2" Margin="0,3,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="4*"/>
+                                <ColumnDefinition Width="5*"/>
+                                <ColumnDefinition Width="5*"/>
+                                <ColumnDefinition Width="5*"/>
+                                <ColumnDefinition Width="5*"/>
+                                <ColumnDefinition Width="5*"/>
+                                <ColumnDefinition Width="5*"/>
+                                <ColumnDefinition Width="5*"/>
+                                <ColumnDefinition Width="5*"/>
+                                <ColumnDefinition Width="5*"/>
+                                <ColumnDefinition Width="5*"/>
+                                <ColumnDefinition Width="5*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="1" Style="{StaticResource RulerLabel}" Text="50 s"/>
+                            <TextBlock Grid.Column="3" Style="{StaticResource RulerLabel}" Text="40 s"/>
+                            <TextBlock Grid.Column="5" Style="{StaticResource RulerLabel}" Text="30 s"/>
+                            <TextBlock Grid.Column="7" Style="{StaticResource RulerLabel}" Text="20 s"/>
+                            <TextBlock Grid.Column="9" Style="{StaticResource RulerLabel}" Text="10 s"/>
+                            <TextBlock Grid.Column="11" Style="{StaticResource RulerLabel}" Grid.ColumnSpan="1" HorizontalAlignment="Right" Text="now"/>
+                        </Grid>
+                    </Grid>
 
-                    <!-- 8 sopra e sotto (erano 12), per fare posto alla riga dei core sotto la CPU senza allungare troppo il widget -->
-                    <rt:Ruler Margin="0,8,0,8"/>
+                    <!-- i dischi: tre righe come sempre; la colonna del testo ha una larghezza sola, così le barre sono lunghe uguale -->
+                    <ItemsControl x:Name="DriveList" Margin="0,6,0,0" Grid.IsSharedSizeScope="True">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,1,0,1">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="28"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="DriveCaption"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Name}" Style="{StaticResource InfoText}"/>
+                                    <ProgressBar Grid.Column="1" Value="{Binding UsedPercent}" Maximum="100" Margin="0,0,8,0" VerticalAlignment="Center"
+                                                 Foreground="{DynamicResource Reticle.Brush.Danger}" Background="{DynamicResource Reticle.Brush.Line.Subtle}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Caption}" Style="{StaticResource ProcessValue}"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
 
-                    <!-- TOP PROCESSES: due Panel con la legenda sulla cornice -->
-                    <Grid x:Name="TopPanels">
+                    <!-- TOP: due Panel con la legenda sulla cornice, un programma per riga -->
+                    <Grid x:Name="TopPanels" Margin="0,12,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="*"/>
@@ -309,7 +475,7 @@
                             <ItemsControl x:Name="TopCpuList" ItemTemplate="{StaticResource CpuProcessRowTemplate}"/>
                         </rt:Panel>
                         <rt:Panel Grid.Column="1" Legend="Top RAM" Margin="6,0,0,0">
-                            <ItemsControl x:Name="TopRamList" ItemTemplate="{StaticResource ProcessRowTemplate}"/>
+                            <ItemsControl x:Name="TopRamList" ItemTemplate="{StaticResource RamProcessRowTemplate}"/>
                         </rt:Panel>
                     </Grid>
 
