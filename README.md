@@ -11,7 +11,7 @@ small window that starts with Windows: it shows CPU per core, RAM, GPU, network 
 last minute, and uses about 2% of one core.
 
 <p>
-  <img src="docs/screenshots/dark.webp" width="420" alt="Pulse with the dark theme: CPU with per-core bars, RAM, GPU with its temperature line, network and disk with mirrored graphs, top programs" />
+  <img src="docs/screenshots/dark.webp" width="420" alt="Pulse running as administrator: CPU with temperature, power and per-core bars colored by program, RAM, GPU, network and disk with mirrored graphs, top programs" />
   <img src="docs/screenshots/light.webp" width="420" alt="Pulse with the light theme" />
 </p>
 
