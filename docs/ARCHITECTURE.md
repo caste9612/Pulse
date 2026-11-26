@@ -37,8 +37,8 @@ How Pulse is structured under the hood.
 │        │ Ring-0 via signed driver                                  │
 │        ▼                                                           │
 │  ┌──────────────────────────────┐                                  │
-│  │ Kernel driver (Ring 0)       │  AMDRyzenMasterDriverV31 (AMD)   │
-│  │ exposes MSR / SMU / NVAPI    │  or LHM's own driver (Intel/AMD) │
+│  │ Kernel driver (Ring 0)       │  PawnIO (Intel and AMD),         │
+│  │ exposes MSR / SMU / NVAPI    │  installed separately            │
 │  └──────────────────────────────┘                                  │
 │                                                                    │
 │  ┌──────────────────┐  ┌──────────────────────┐                    │
@@ -59,9 +59,9 @@ Different metrics update at different rates to balance freshness vs CPU cost:
 | Service | Interval | Cost per tick | Why |
 |---|---|---|---|
 | MetricsService | 1 s | ~5 ms | Direct Win32 calls through `NativeMetrics`; runs on the UI thread (`DispatcherTimer`) |
-| HardwareMonitor (LHM, NVML) | 2 s | ~5 ms with an NVIDIA GPU, ~80 ms through LHM alone | CPU sensors through LHM, the shown GPU through NVML when it's an NVIDIA (see below); background thread |
+| HardwareMonitor (LHM, NVML) | 2 s | ~5 ms with an NVIDIA GPU, ~80 ms through LHM alone | CPU sensors through LHM, the shown GPU through NVML when it's an NVIDIA (see below), the average CPU speed when LHM has no core clocks (`CpuSpeed`, ~0.4 ms); background thread |
 | ProcessMonitor | 5 s | 50-200 ms | Process.GetProcesses is expensive; background thread |
-| NetworkMonitor | 2 s | <5 ms (ping) | Async ping to 8.8.8.8; adapter scan on a background thread, `netsh wlan` only when the active connection is Wi-Fi (every 30 s: until v1.2.0 every 8 s even on a cable, 31 ms of CPU each); public IP every 10 min |
+| NetworkMonitor | 2 s | <5 ms (ping) | Async ping to 8.8.8.8; the active adapter and the local IP (`GetAllNetworkInterfaces`, ~30 ms with 65 interfaces) only when Windows reports an address change and once a minute, on a background thread (until v1.3.0 every 2 s); `netsh wlan` only when the active connection is Wi-Fi (every 30 s: until v1.2.0 every 8 s even on a cable, 31 ms of CPU each); public IP every 10 min |
 | DriveMonitor | 30 s | <5 ms | DriveInfo is fast; can stall on sleeping HDDs (background) |
 
 The 1 s tick is cheap enough to run on the UI thread. All slower work happens on `Task.Run` background threads, and the UI thread only does the final text/sparkline updates.
@@ -73,22 +73,32 @@ The 1 s tick is cheap enough to run on the UI thread. All slower work happens on
 
 Measured with Pulse's own `HardwareMonitor` on the reference PC, not elevated: a sensor read went from 84 ms (22 ms of CPU) to 4.8 ms (1 ms of CPU), with the same values.
 
+A GPU with no memory of its own, an integrated one (LHM's `gpu-intel-integrated`, or any GPU with shared memory only), is chosen only when no card has dedicated memory. An Intel integrated GPU has no "GPU Core" load and no "GPU Memory" sensors, only the D3D statistics of the adapter: the load is that of the busiest engine (3D, copy, video...), the way Task Manager computes it, and the memory is the RAM shared with the CPU (`GpuMemShared`, "shared" in the widget). Its power is left out of the PC estimate (`GpuIntegrated`): it is part of the CPU package. Until v1.3.0 such a GPU read 0%.
+
 Performance log: ticks that exceed thresholds (50 ms metrics tick, 200 ms hardware/network/process ticks, 500 ms whole slow tick) get logged to `%TEMP%\pulse-perf.log` for debugging UI freezes. The same file gets a line when the core sampling of an elevated Pulse can't start or delivers no samples (see "Which process runs on which core").
 
 ## Data flow
 
-1. **MetricsService timer fires** (1 s, UI thread) → `NativeMetrics` reads the CPU times (`GetSystemTimes`), the times of every logical processor (`NtQuerySystemInformation`, `SystemProcessorPerformanceInformation`), memory (`GlobalMemoryStatusEx`, `GetPerformanceInfo` for the committed memory, `NtQuerySystemInformation` for the memory lists, `SystemMemoryListInformation`, and the page files, `SystemPageFileInformation`), the system-wide I/O byte counters (`NtQuerySystemInformation`, `SystemPerformanceInformation`), the network interface table (`GetIfTable2`) and the CPU clock (`CallNtPowerInformation`). CPU %, the per-core loads and the disk/network rates come from the delta with the previous sample. Which logical processors share a physical core is read once, at startup (`GetLogicalProcessorInformationEx`). With Pulse elevated, `CoreSampler` adds which processes ran on each core (see below).
+1. **MetricsService timer fires** (1 s, UI thread) → `NativeMetrics` reads the CPU times (`GetSystemTimes`), the times of every logical processor (`NtQuerySystemInformation`, `SystemProcessorPerformanceInformation`), memory (`GlobalMemoryStatusEx`, `GetPerformanceInfo` for the committed memory, `NtQuerySystemInformation` for the memory lists, `SystemMemoryListInformation`, and the page files, `SystemPageFileInformation`), the system-wide I/O byte counters (`NtQuerySystemInformation`, `SystemPerformanceInformation`), the counters of the physical adapters that are up (`GetIfEntry2`; which adapters, `GetIfTable2` says every 10 s and as soon as one goes down: reading the whole table every second cost 2.4–3 ms with 64 interfaces, with peaks over 100 ms) and the clock Windows reports (`CallNtPowerInformation`, the last fallback for the CPU clock). CPU %, the per-core loads and the disk/network rates come from the delta with the previous sample. Which logical processors share a physical core is read once, at startup (`GetLogicalProcessorInformationEx`). With Pulse elevated, `CoreSampler` adds which processes ran on each core (see below).
 2. Raises `Updated` event.
 3. `MainWindow.OnMetricsUpdated` updates TextBlocks and assigns a fresh `ToArray()` of each 60-value history to its graph: load and temperature to the three `Sparkline`s (CPU, RAM, GPU), in and out to the two `MirrorSpark`s (NET, DSK), kept as separate histories in bytes per second. The same tick sets the level behind each metric (`LevelTint`: the value now and the highest of its history) and the fresh per-core array of `CoreBars`. Every assignment triggers `OnRender`.
-4. **Slow tick fires** (2 s, separate timer) → background `Task.Run(_hw.Update)` (LHM), then `_net.UpdateAsync()`, then back on the UI thread to update temp/clock/watt/IP labels.
+4. **Slow tick fires** (2 s, separate timer) → background `Task.Run(_hw.Update)` (LHM, and the average CPU speed when LHM has no core clocks), then `_net.UpdateAsync()`, then back on the UI thread to update temp/clock/watt/IP labels.
 5. `MetricsService.GpuExternal`, `VramUsedExternalGb`, `CpuTempExternal` and `GpuTempExternal` are set from `HardwareMonitor` outputs, so the GPU sparkline and the two temperature histories still advance on the 1 s tick (`NaN` when there is no reading).
 6. **Process tick** (5 s) and **drive tick** (30 s) scan on `Task.Run`, then replace the items of the *Top CPU* / *Top RAM* panels and of the drive list. `ProcessMonitor` samples every process as before, then adds up the processes with the same name (case-insensitive) into one `ProgramSample`: CPU and working set summed, the process IDs ordered from the heaviest. A row of the panels is a program.
 
 ## The panel layout
 
-From v1.4.0 every metric is a `Grid` with the same three columns: 168 units of text, a 12-unit gap and the graph (`*`). Inside the text column a second grid (38, 70, `*`) holds the label, the main value and the second value, the last two right-aligned, so a value that gets longer never moves another one and the five graphs start at the same place. The row under it has the one detail line of the metric on the left and, under the graph, its bar (cores, memory, VRAM), the addresses (NET) or the time ruler (DSK). The text column fits its values by construction, so the Fit button measures only the header and the address line at their longest text.
+From v1.4.0 every metric is a `Grid` with the same three columns: 168 units of text, a 12-unit gap and the graph (`*`). Inside the text column a second grid (38, 70, `*`) holds the label, the main value and the second value, the last two right-aligned, so a value that gets longer never moves another one and the five graphs start at the same place. The row under it has the one detail line of the metric on the left and, under the graph, its bar (cores, memory, VRAM), the addresses (NET) or the time ruler (DSK). An integrated GPU has no memory of its own to draw a bar for: its name, which says which GPU is shown on a PC without a graphics card, takes that place; the name and the clocks of a graphics card are in the tooltip of the GPU row. The text column fits its values by construction, so the Fit button measures only the header and the address line at their longest text.
 
 `Controls/LevelTint.cs` sits behind the text of each metric: a track in the series colour at 5 %, the same colour at 18 % from the left for `Value` (0 to 1) of the width, solid only on a 2-unit line along the bottom, and a small tick at `Peak`, the highest value of the 60-second history (`TickWidth` × `TickHeight`, 2 × 6 units). No vertical edge crosses the text. NET and DSK have two of them, one per direction (the second at 60 % strength), starting after the label and the arrows, with the tick as a 4 × 2 dash on the bottom edge: in 16-unit rows the digits reach almost to the edge, and a taller tick would end up over them; their value is logarithmic, `log10(KB/s) / 6`, i.e. 1 KB/s to 1 GB/s, because the graph next to them already has the linear scale.
+
+## CPU speed without the MSR sensors
+
+LibreHardwareMonitor reads the core clocks from the MSRs, so only with the PawnIO driver and administrator rights (`docs/HARDWARE-SUPPORT.md`). The clock Windows gives cheaply, `CallNtPowerInformation`, is the base clock on recent Intel processors: 3.50 GHz at all times on the i9-11900K test PC. Task Manager's *Speed* is the base clock times *% Processor Performance*, a counter of the kernel's *Processor Information* counterset that goes over 100 % with turbo: the average performance of the cores while they run.
+
+`Services/CpuSpeed.cs` reads it with the PerfLib V2 consumer API of advapi32 (`PerfOpenQueryHandle`, `PerfAddCounters`, `PerfQueryCounterData`): the counterset by GUID, the counters by their English names (a Windows in another language works the same), the `_Total` instance, and the ratio between the counter and its base from one read to the next. `HardwareMonitor` opens it at start when Pulse is not elevated or PawnIO is missing, otherwise only if the core clocks don't come, and reads it at each slow tick; `HardwareMonitor.CpuClockIsAverage` tells the widget which clock it shows, for the tooltip.
+
+PDH gives the same values (checked side by side on the i9-11900K, to the decimal) but costs 6.4 MB of private memory and 420 ms at the first query, for its counter name tables; PerfLib V2 under 1 MB and about 0.4 ms per read. The distribution of the performance states (`NtQuerySystemInformation`, class 100) would be cheaper still, but gave nothing usable on that CPU.
 
 ## Sparkline rendering
 

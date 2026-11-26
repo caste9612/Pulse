@@ -217,7 +217,7 @@ public partial class App : Application
             var adminItem = new MenuItem
             {
                 Header = "Restart as administrator",
-                ToolTip = "Enables CPU temperature and power (MSR registers) and the process colours in the core bars"
+                ToolTip = "Enables the process colours in the core bars and, with the PawnIO driver installed, CPU temperature and power (MSR registers)"
             };
             adminItem.Click += (_, _) => RestartAsAdmin();
             menu.Items.Add(adminItem);

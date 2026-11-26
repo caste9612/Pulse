@@ -55,6 +55,8 @@
         <!-- la riga di dettaglio sotto ogni metrica: una sola, sempre nello stesso punto -->
         <Style x:Key="DetailText" TargetType="TextBlock" BasedOn="{StaticResource DimText}">
             <Setter Property="Margin" Value="0,4,0,0"/>
+            <!-- i testi di Pulse ci stanno per costruzione; un nome che viene dal PC (la GPU, la rete Wi-Fi) si accorcia con i puntini -->
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
         </Style>
         <Style x:Key="ProcessName" TargetType="TextBlock" BasedOn="{StaticResource InfoText}">
             <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
@@ -206,7 +208,7 @@
                         <rt:TrackedText Text="Pulse" Style="{StaticResource Reticle.Tracked.Legend}" Margin="8,0,0,0" VerticalAlignment="Center"/>
                         <TextBlock x:Name="UptimeText" Style="{StaticResource InfoText}" Margin="14,0,0,0"/>
                         <TextBlock x:Name="PowerText" Style="{StaticResource InfoText}" Foreground="{DynamicResource TempBrush}" Margin="14,0,0,0"
-                                   ToolTip="Estimated total PC power (CPU + GPU + about 30 W for the rest)"/>
+                                   ToolTip="Estimated total PC power: CPU + graphics card + about 30 W for the rest (an integrated GPU is part of the CPU figure)"/>
                     </StackPanel>
                 </DockPanel>
             </Border>
@@ -289,7 +291,8 @@
 
                     <Rectangle Style="{StaticResource MetricDivider}"/>
 
-                    <!-- GPU: i due clock stanno nel tooltip della riga (GpuHead), non più in vista -->
+                    <!-- GPU: il nome e i due clock stanno nel tooltip della riga (GpuHead), non più in vista. Sotto il grafico la barra
+                         della memoria video; per una GPU integrata, che non ne ha una sua, il nome (dalla 1.3.2 sta sempre in vista) -->
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="168"/>
@@ -319,6 +322,7 @@
                         <TextBlock x:Name="GpuDetail" Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource DetailText}" Text=""/>
                         <ProgressBar x:Name="GpuVramBar" Grid.Row="1" Grid.Column="2" Maximum="100" Margin="0,4,0,0" VerticalAlignment="Center"
                                      Foreground="{DynamicResource Reticle.Brush.Success}" Background="{DynamicResource Reticle.Brush.Line.Subtle}"/>
+                        <TextBlock x:Name="GpuName" Grid.Row="1" Grid.Column="2" Style="{StaticResource DetailText}" Text="" Visibility="Collapsed"/>
                     </Grid>
 
                     <Rectangle Style="{StaticResource MetricDivider}"/>
@@ -370,7 +374,7 @@
                             </Grid>
                         </Border>
                         <TextBlock x:Name="NetDetail" Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource DetailText}" Text=""/>
-                        <TextBlock x:Name="NetAddr" Grid.Row="1" Grid.Column="2" Style="{StaticResource DetailText}" TextTrimming="CharacterEllipsis" Text=""/>
+                        <TextBlock x:Name="NetAddr" Grid.Row="1" Grid.Column="2" Style="{StaticResource DetailText}" Text=""/>
                     </Grid>
 
                     <Rectangle Style="{StaticResource MetricDivider}"/>
