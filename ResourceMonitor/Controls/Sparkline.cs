@@ -40,10 +40,63 @@ public sealed class Sparkline : FrameworkElement
         DependencyProperty.Register(nameof(ShowEndDot), typeof(bool), typeof(Sparkline),
             new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsRender));
 
+    public static readonly DependencyProperty TempValuesProperty =
+        DependencyProperty.Register(nameof(TempValues), typeof(IEnumerable<double>), typeof(Sparkline),
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public static readonly DependencyProperty TempStrokeProperty =
+        DependencyProperty.Register(nameof(TempStroke), typeof(Brush), typeof(Sparkline),
+            new FrameworkPropertyMetadata(Brushes.Orange, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public static readonly DependencyProperty GridStepProperty =
+        DependencyProperty.Register(nameof(GridStep), typeof(int), typeof(Sparkline),
+            new FrameworkPropertyMetadata(0, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public static readonly DependencyProperty GridBrushProperty =
+        DependencyProperty.Register(nameof(GridBrush), typeof(Brush), typeof(Sparkline),
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
     public IEnumerable<double>? Values
     {
         get => (IEnumerable<double>?)GetValue(ValuesProperty);
         set => SetValue(ValuesProperty, value);
+    }
+
+    /// <summary>La temperatura della stessa parte, una linea sottile sulla scala del carico: gradi e percento stanno tutti e due
+    /// tra 0 e 100. NaN dove la temperatura non c'è: lì la linea si interrompe. Null = nessuna linea.</summary>
+    public IEnumerable<double>? TempValues
+    {
+        get => (IEnumerable<double>?)GetValue(TempValuesProperty);
+        set => SetValue(TempValuesProperty, value);
+    }
+
+    public Brush TempStroke
+    {
+        get => (Brush)GetValue(TempStrokeProperty);
+        set => SetValue(TempStrokeProperty, value);
+    }
+
+    /// <summary>Una riga verticale ogni tanti campioni, contati dal più recente: con la stessa larghezza e lo stesso passo cade
+    /// alla stessa x in tutti i grafici. 0 = nessuna.</summary>
+    public int GridStep
+    {
+        get => (int)GetValue(GridStepProperty);
+        set => SetValue(GridStepProperty, value);
+    }
+
+    public Brush? GridBrush
+    {
+        get => (Brush?)GetValue(GridBrushProperty);
+        set => SetValue(GridBrushProperty, value);
+    }
+
+    /// <summary>Le righe della griglia del tempo, larghe un pixel dello schermo. Le usa anche <see cref="MirrorSpark"/>.</summary>
+    internal static void DrawGrid(DrawingContext dc, Brush? brush, int step, int count, double w, double h, double scale)
+    {
+        if (brush is null || step <= 0 || count < 2) return;
+        double stepX = w / (count - 1);
+        for (int i = count - 1 - step; i > 0; i -= step)
+            dc.DrawRectangle(brush, null, new Rect(Math.Round(i * stepX * scale) / scale, 0, 1 / scale, h));
     }
 
     public double MaxValue
@@ -104,6 +157,8 @@ public sealed class Sparkline : FrameworkElement
         double w = ActualWidth;
         double h = ActualHeight;
         if (w <= 0 || h <= 0) return;
+
+        DrawGrid(dc, GridBrush, GridStep, n, w, h, VisualTreeHelper.GetDpi(this).PixelsPerDip);
 
         // Calcola max (autoscale) o usa MaxValue. Iterate enumerator, no ToArray.
         double max;
@@ -173,6 +228,38 @@ public sealed class Sparkline : FrameworkElement
         };
         if (pen.CanFreeze) pen.Freeze();
         dc.DrawGeometry(null, pen, lineGeo);
+
+        // TEMPERATURA: una linea da un pixel, dritta tra un campione e l'altro, sulla stessa scala; si interrompe sui NaN
+        if (TempValues is { } temps)
+        {
+            var tempGeo = new StreamGeometry();
+            bool any = false;
+            using (var ctx = tempGeo.Open())
+            {
+                bool open = false;
+                int i = 0;
+                foreach (double t in temps)
+                {
+                    if (i >= n) break;
+                    if (double.IsNaN(t)) open = false;
+                    else
+                    {
+                        var p = new Point(i * stepX, h - pad - Math.Clamp(t / max, 0, 1) * usableH);
+                        if (open) ctx.LineTo(p, true, true);
+                        else { ctx.BeginFigure(p, false, false); open = true; }
+                        any = true;
+                    }
+                    i++;
+                }
+            }
+            if (any)
+            {
+                tempGeo.Freeze();
+                var tempPen = new Pen(TempStroke, 1) { LineJoin = PenLineJoin.Round };
+                if (tempPen.CanFreeze) tempPen.Freeze();
+                dc.DrawGeometry(null, tempPen, tempGeo);
+            }
+        }
 
         // DOT on last value
         if (ShowEndDot)

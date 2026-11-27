@@ -32,10 +32,33 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
     private bool _cornerPickerOpen;
     private bool _ramTipOpen;
 
-    // il processo di ogni colore nelle barre dei core (-1 = colore libero): fino a tre processi di Top CPU sopra il mezzo core,
+    // il programma di ogni colore nelle barre dei core (null = colore libero): fino a tre programmi di Top CPU sopra il mezzo core,
     // ciascuno col suo colore finché non scende sotto un quarto di core, anche se cambia posto
-    private readonly int[] _slotPids = { -1, -1, -1 };
+    private readonly string?[] _slotNames = new string?[CoreSampler.Slots];
     private const double TrackFromCores = 0.5, TrackUntilCores = 0.25;
+
+    // clock e watt della CPU arrivano ogni due secondi (TickSlowAsync) e stanno nella riga di dettaglio, che si rifà a ogni secondo
+    private string _cpuClockText = "", _cpuPowerText = "", _cpuClockTip = "";
+
+    // scale fisse per i grafici di rete e disco, in byte al secondo, a passi 1-2-5 da 100 KB/s a 10 GB/s: si sale alla prima che
+    // contiene il massimo del minuto, che così prende almeno i due quinti dell'altezza. Con passi da dieci un picco poteva restare
+    // alto un decimo, due pixel in mezza altezza da 16: su questo PC il disco supera i 100 MB/s quasi ogni minuto e il grafico,
+    // sempre sulla scala da 1 GB/s, era una riga piatta. Sotto i 100 KB/s non si scende: un minuto fermo resta piatto
+    private static readonly (double Max, string Label)[] RateScales = BuildRateScales();
+
+    private static (double Max, string Label)[] BuildRateScales()
+    {
+        const double Lowest = 100 * 1024d, Highest = 10 * 1024d * 1024 * 1024;
+        string[] units = { "KB/s", "MB/s", "GB/s" };
+        var scales = new List<(double, string)>();
+        for (int unit = 0; unit < units.Length; unit++)
+            foreach (int step in new[] { 1, 2, 5, 10, 20, 50, 100, 200, 500 })
+            {
+                double max = step * Math.Pow(1024, unit + 1);
+                if (max >= Lowest && max <= Highest) scales.Add((max, $"{step} {units[unit]}"));
+            }
+        return scales.ToArray();
+    }
 
     // margine dai bordi dello schermo negli angoli e nella posizione del primo avvio: lo spazio S3 di Reticle (12 unità),
     // lo stesso che il contenuto ha dentro la cornice
@@ -58,10 +81,10 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         _metrics.Updated += OnMetricsUpdated;
 
         CoreBars.Cores = _metrics.CpuCorePhysical;
-        CpuCoresText.ToolTip = CoreBars.ToolTip = BuildCoresTooltip();
+        CpuDetail.ToolTip = CoreBars.ToolTip = BuildCoresTooltip();
 
         // il tooltip della RAM si rifà a ogni secondo, ma non mentre è aperto: chi lo sta leggendo non lo vede cambiare
-        foreach (var host in new FrameworkElement[] { RamAvailableText, RamBar })
+        foreach (var host in new FrameworkElement[] { RamDetail, RamBar })
         {
             host.ToolTipOpening += (_, _) => _ramTipOpen = true;
             host.ToolTipClosing += (_, _) => _ramTipOpen = false;
@@ -105,6 +128,9 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         };
         for (int i = 0; i < processes.Length; i++) Resources[$"ProcessBrush{i}"] = processes[i];
         CoreBars.ShareFills = processes;
+        // le righe della griglia del tempo: il colore del testo del tema, al 7 % (un po' di più sul chiaro, dove si perde)
+        if (TryFindResource("Reticle.Brush.Text.Primary") is System.Windows.Media.SolidColorBrush text)
+            Resources["GridLineBrush"] = Frozen(Reticle.Wpf.Palette.WithAlpha(text.Color, light ? 0.10 : 0.07));
     }
 
     private static System.Windows.Media.SolidColorBrush Frozen(System.Windows.Media.Color color)
@@ -161,28 +187,92 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             CpuValue.Text = $"{_metrics.Cpu:0.0}%";
             CoreBars.Values = _metrics.CpuCores;
             CoreBars.Shares = _metrics.CpuCoreShares;
-            CpuCoresText.Text = _metrics.CpuCores.Length > 0 ? $"≈ {_metrics.CpuCoresInUse:0.0} cores in use" : "";
+            CpuDetail.Text = BuildCpuDetail();
             RamValue.Text = $"{_metrics.RamUsedPercent:0}%";
-            RamUsed.Text = $"{_metrics.RamUsedGb:0.0} / {_metrics.RamTotalGb:0.0} GB";
+            RamUsed.Text = $"{_metrics.RamUsedGb:0.0} GB";
+            RamDetail.Text = $"{_metrics.RamAvailableGb:0.0} GB available of {_metrics.RamTotalGb:0.0} GB";
             GpuValue.Text = $"{_metrics.Gpu:0}%";
-            GpuVram.Text = BuildVramText();
+            GpuDetail.Text = BuildGpuDetail();
 
-            NetValue.Text = $"↓ {Fmt(_metrics.NetRecvBytesPerSec)}  ↑ {Fmt(_metrics.NetSentBytesPerSec)}";
-            DiskValue.Text = $"↓ {Fmt(_metrics.DiskReadBytesPerSec)}  ↑ {Fmt(_metrics.DiskWriteBytesPerSec)}";
+            NetDown.Text = Fmt(_metrics.NetRecvBytesPerSec);
+            NetUp.Text = Fmt(_metrics.NetSentBytesPerSec);
+            DiskRead.Text = Fmt(_metrics.DiskReadBytesPerSec);
+            DiskWrite.Text = Fmt(_metrics.DiskWriteBytesPerSec);
 
-            CpuSpark.Values = _metrics.CpuHistory.ToArray();
-            RamSpark.Values = _metrics.RamHistory.ToArray();
-            GpuSpark.Values = _metrics.GpuHistory.ToArray();
-            NetSpark.Values = _metrics.NetHistory.ToArray();
-            DiskSpark.Values = _metrics.DiskHistory.ToArray();
+            var cpu = _metrics.CpuHistory.ToArray();
+            var ram = _metrics.RamHistory.ToArray();
+            var gpu = _metrics.GpuHistory.ToArray();
+            var recv = _metrics.NetRecvHistory.ToArray();
+            var sent = _metrics.NetSentHistory.ToArray();
+            var read = _metrics.DiskReadHistory.ToArray();
+            var write = _metrics.DiskWriteHistory.ToArray();
+            CpuSpark.Values = cpu;
+            CpuSpark.TempValues = _metrics.CpuTempHistory.ToArray();
+            RamSpark.Values = ram;
+            GpuSpark.Values = gpu;
+            GpuSpark.TempValues = _metrics.GpuTempHistory.ToArray();
+            SetMirror(NetSpark, NetScale, recv, sent);
+            SetMirror(DiskSpark, DiskScale, read, write);
 
-            RamAvailableText.Text = $"{_metrics.RamAvailableGb:0.0} GB available";
+            // il livello di adesso dietro il testo, con la tacca sul massimo del minuto; rete e disco su scala logaritmica, da
+            // 1 KB/s a 1 GB/s: lì il grafico accanto ha già la scala lineare, e così si vede anche il traffico piccolo
+            SetLevel(CpuLevel, _metrics.Cpu / 100, cpu.Max() / 100);
+            SetLevel(RamLevel, _metrics.RamUsedPercent / 100, ram.Max() / 100);
+            SetLevel(GpuLevel, _metrics.Gpu / 100, gpu.Max() / 100);
+            SetLevel(NetDownLevel, RateLevel(_metrics.NetRecvBytesPerSec), RateLevel(recv.Max()));
+            SetLevel(NetUpLevel, RateLevel(_metrics.NetSentBytesPerSec), RateLevel(sent.Max()));
+            SetLevel(DiskReadLevel, RateLevel(_metrics.DiskReadBytesPerSec), RateLevel(read.Max()));
+            SetLevel(DiskWriteLevel, RateLevel(_metrics.DiskWriteBytesPerSec), RateLevel(write.Max()));
+
             RamBar.Parts = double.IsNaN(_metrics.RamInUseGb)
                 ? new[] { _metrics.RamUsedGb, 0, 0, _metrics.RamAvailableGb }   // senza le liste della memoria: usata e disponibile
                 : new[] { _metrics.RamInUseGb, _metrics.RamModifiedGb, _metrics.RamStandbyGb, _metrics.RamFreeGb };
-            if (!_ramTipOpen) RamAvailableText.ToolTip = RamBar.ToolTip = BuildRamTooltip();
+            if (!_ramTipOpen) RamDetail.ToolTip = RamBar.ToolTip = BuildRamTooltip();
             UptimeText.Text = BuildUptime();
         });
+    }
+
+    // quanti core pieni vale il carico, poi clock e watt quando ci sono: una riga sola, corta abbastanza da stare sempre nei suoi
+    // 180 punti anche con 32 core al lavoro e 230 W
+    private string BuildCpuDetail()
+    {
+        var parts = new List<string>(3);
+        if (_metrics.CpuCores.Length > 0) parts.Add($"≈ {_metrics.CpuCoresInUse:0.0} cores");
+        if (_cpuClockText.Length > 0) parts.Add(_cpuClockText);
+        if (_cpuPowerText.Length > 0) parts.Add(_cpuPowerText);
+        return string.Join(" · ", parts);
+    }
+
+    private string BuildGpuDetail()
+    {
+        var vram = BuildVramText();
+        var power = _hw.GpuPowerW is double pw && pw > 0 ? $"{pw:0} W" : "";
+        var detail = vram.Length > 0 && power.Length > 0 ? $"{vram} · {power}" : vram + power;
+        // una scheda di cui non si leggono né memoria né consumo: almeno il nome, così la riga non resta vuota (quello di
+        // un'integrata sta già sotto il grafico)
+        if (detail.Length == 0 && !_hw.GpuIntegrated && !string.IsNullOrEmpty(_hw.GpuName)) detail = ShortName(_hw.GpuName);
+        return detail;
+    }
+
+    private static void SetLevel(Controls.LevelTint level, double value, double peak)
+    {
+        level.Value = value;
+        level.Peak = peak;
+    }
+
+    private static double RateLevel(double bytesPerSec) => Math.Clamp(Math.Log10(Math.Max(1, bytesPerSec / 1024)) / 6, 0, 1);
+
+    // il grafico a specchio prende la scala fissa più piccola che contiene il massimo delle due storie, e la scala si scrive accanto
+    private static void SetMirror(Controls.MirrorSpark spark, System.Windows.Controls.TextBlock label, double[] above, double[] below)
+    {
+        double max = Math.Max(above.Max(), below.Max());
+        var scale = RateScales[^1];
+        foreach (var candidate in RateScales)
+            if (candidate.Max >= max) { scale = candidate; break; }
+        spark.MaxValue = scale.Max;
+        spark.Above = above;
+        spark.Below = below;
+        if (label.Text != scale.Label) label.Text = scale.Label;
     }
 
     private string BuildCoresTooltip()
@@ -193,10 +283,10 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         var bars = physical < logical ? "one bar per logical core, those of the same physical core side by side" : "one bar per core";
         var colors = _metrics.CoreSamplingDisabled ? ""
             : _metrics.CoreSamplingAvailable
-                ? $"\nColours: the share of each core used by the Top CPU processes above half a core ({TrackFromCores * 100 / logical:0.0} %), " +
+                ? $"\nColours: the share of each core used by the Top CPU programs above half a core ({TrackFromCores * 100 / logical:0.0} %), " +
                   "up to three (the small square next to the name), sampled by the kernel 100 times a second, only while there is one; " +
                   "the rest in the CPU colour."
-                : "\nTo see in colour which Top CPU processes use the cores, run Pulse as administrator.";
+                : "\nTo see in colour which Top CPU programs use the cores, run Pulse as administrator.";
         return $"Sum of the loads of the {cores}: how many full cores the current work is worth.\n" +
                $"Under the graph, {bars}: many medium bars mean parallel work, a single full one a single thread." + colors;
     }
@@ -315,54 +405,64 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
             // la frequenza misurata (il core più veloce, o la velocità media dei core al lavoro); senza, quella che dice Windows
             bool measured = _hw.CpuClockMhz is double m && m > 0;
             double cpuMhz = measured ? _hw.CpuClockMhz!.Value : (_metrics.CpuFreqMhz > 0 ? _metrics.CpuFreqMhz : 0);
-            CpuClock.Text = cpuMhz > 0 ? $"{cpuMhz / 1000:0.00} GHz" : "";
-            CpuClock.ToolTip = !measured ? "Clock reported by Windows (the base clock on many processors)"
-                : _hw.CpuClockIsAverage ? "Average speed of the cores at work, as in Task Manager"
-                : "Clock of the fastest core";
-            CpuPower.Text = _hw.CpuPowerW is double cpw && cpw > 0 ? $"{cpw:0.0}W" : "";
-            // vuoto non occupa posto: il suo margine lascerebbe un buco tra la temperatura e i core
-            CpuPower.Visibility = CpuPower.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            _cpuClockText = cpuMhz > 0 ? $"{cpuMhz / 1000:0.00} GHz" : "";
+            _cpuClockTip = cpuMhz <= 0 ? ""
+                : !measured ? "Clock reported by Windows (the base clock on many processors)."
+                : _hw.CpuClockIsAverage ? "Clock: the average speed of the cores at work, as in Task Manager."
+                : "Clock of the fastest core.";
+            _cpuPowerText = _hw.CpuPowerW is double cpw && cpw > 0 ? $"{cpw:0} W" : "";
+            // la riga di dettaglio porta anche il clock: il suo tooltip dice quale, in coda a quello dei core
+            var cpuTip = _cpuClockTip.Length > 0 ? BuildCoresTooltip() + "\n" + _cpuClockTip : BuildCoresTooltip();
+            if (!Equals(CpuDetail.ToolTip, cpuTip)) CpuDetail.ToolTip = cpuTip;
 
             if (_hw.CpuTempC is double t1 && t1 > 5)
             {
                 CpuTemp.Text = $"{t1:0}°C";
-                CpuTemp.ToolTip = null;
+                CpuTemp.ToolTip = "CPU temperature: also the thin line in the graph, on the same 0 to 100 scale as the load.";
+                _metrics.CpuTempExternal = t1;
             }
             else
             {
                 CpuTemp.Text = "n/a";
                 CpuTemp.ToolTip = CpuSensorsHint();
+                _metrics.CpuTempExternal = double.NaN;
             }
 
-            GpuTemp.Text = _hw.GpuTempC is double t2 && t2 > 5 ? $"{t2:0}°C" : "";
-            GpuTemp.Visibility = GpuTemp.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-            DiskTemp.Text = _hw.StorageTempC is double t3 && t3 > 5 ? $"{t3:0}°C" : "";
+            bool gpuTemp = _hw.GpuTempC is double t2 && t2 > 5;
+            GpuTemp.Text = gpuTemp ? $"{_hw.GpuTempC:0}°C" : "";
+            _metrics.GpuTempExternal = gpuTemp ? _hw.GpuTempC!.Value : double.NaN;
+            DiskTemp.Text = _hw.StorageTempC is double t3 && t3 > 5 ? $"SSD {t3:0}°C" : "";
 
-            var gpuDetailParts = new List<string>();
-            if (_hw.GpuClockMhz is double gc && gc > 0) gpuDetailParts.Add($"core {gc:0}MHz");
-            if (_hw.GpuMemClockMhz is double mc && mc > 0) gpuDetailParts.Add($"mem {mc:0}MHz");
-            if (_hw.GpuPowerW is double pw && pw > 0) gpuDetailParts.Add($"{pw:0.0}W");
-            // il nome, che dice quale GPU si vede: in testa per un'integrata, che non ha frequenze e al più il consumo (con
-            // PawnIO), così la riga non resta quasi vuota; per una scheda solo se non c'è nient'altro
-            if (!string.IsNullOrEmpty(_hw.GpuName) && (_hw.GpuIntegrated || gpuDetailParts.Count == 0))
-                gpuDetailParts.Insert(0, ShortName(_hw.GpuName));
-            GpuDetail.Text = string.Join("  •  ", gpuDetailParts);
-            GpuVram.ToolTip = _hw.GpuMemShared
+            // il nome della GPU e i suoi due clock non stanno in vista: si leggono passando sulla riga. Fa eccezione il nome di
+            // un'integrata, che dice quale GPU si vede su un PC senza scheda: sta sotto il grafico, al posto della barra della
+            // memoria video (un'integrata non ne ha una sua)
+            string gpuName = string.IsNullOrEmpty(_hw.GpuName) ? "" : ShortName(_hw.GpuName);
+            var gpuTip = new List<string>();
+            if (gpuName.Length > 0) gpuTip.Add(gpuName);
+            if (_hw.GpuClockMhz is double gc && gc > 0) gpuTip.Add($"Core clock {gc:0} MHz");
+            if (_hw.GpuMemClockMhz is double mc && mc > 0) gpuTip.Add($"Memory clock {mc:0} MHz");
+            GpuHead.ToolTip = gpuTip.Count > 0 ? string.Join("\n", gpuTip) : null;
+            GpuDetail.ToolTip = _hw.GpuMemShared
                 ? "Integrated GPU: it has no memory of its own and uses the RAM it shares with the CPU (Task Manager's shared GPU memory)"
                 : null;
+            bool nameInView = _hw.GpuIntegrated && gpuName.Length > 0;
+            GpuName.Text = nameInView ? gpuName : "";
+            GpuName.Visibility = nameInView ? Visibility.Visible : Visibility.Collapsed;
+            GpuVramBar.Visibility = nameInView ? Visibility.Collapsed : Visibility.Visible;
+            // la memoria condivisa di un'integrata non ha il tetto dei 48 GB (BuildVramText)
+            double vramTotal = _hw.GpuMemTotalMb is double vt && vt > 0 && (_hw.GpuMemShared || vt <= 48 * 1024d) ? vt : 0;
+            GpuVramBar.Value = vramTotal > 0 && _hw.GpuMemUsedMb is double vu && vu > 0 ? Math.Clamp(vu / vramTotal * 100, 0, 100) : 0;
 
-            NetPing.Text = _net.PingMs is double ms ? $"ping {ms:0} ms" : "";
-            var netDetailParts = new List<string>();
-            if (!string.IsNullOrEmpty(_net.AdapterType))
-            {
-                var s = _net.AdapterType;
-                if (!string.IsNullOrEmpty(_net.Ssid)) s += $" • {_net.Ssid}";
-                if (_net.SignalPercent is int sig) s += $" ({sig}%)";
-                netDetailParts.Add(s);
-            }
-            if (!string.IsNullOrEmpty(_net.LocalIp)) netDetailParts.Add($"local {_net.LocalIp}");
-            if (!string.IsNullOrEmpty(_net.PublicIp)) netDetailParts.Add($"pub {_net.PublicIp}");
-            NetDetail.Text = string.Join("  •  ", netDetailParts);
+            // sotto la sigla: il tipo di scheda e il ping; sotto il grafico: la rete Wi-Fi, se c'è, e gli indirizzi
+            var netParts = new List<string>();
+            if (!string.IsNullOrEmpty(_net.AdapterType)) netParts.Add(_net.AdapterType);
+            if (_net.PingMs is double ms) netParts.Add($"ping {ms:0} ms");
+            NetDetail.Text = string.Join(" · ", netParts);
+            var addrParts = new List<string>();
+            if (!string.IsNullOrEmpty(_net.Ssid)) addrParts.Add(_net.SignalPercent is int sig ? $"{_net.Ssid} ({sig}%)" : _net.Ssid);
+            if (!string.IsNullOrEmpty(_net.LocalIp)) addrParts.Add($"local {_net.LocalIp}");
+            if (!string.IsNullOrEmpty(_net.PublicIp)) addrParts.Add($"pub {_net.PublicIp}");
+            NetAddr.Text = string.Join(" · ", addrParts);
             PowerText.Text = BuildPowerEstimate();
         }
         catch (Exception ex)
@@ -386,23 +486,27 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         {
             await Task.Run(() => _proc.Update());
             var topCpu = _proc.TopByCpu;
+            var topRam = _proc.TopByMemory;
             TrackLeaders(topCpu);
-            // a schermo la percentuale della CPU; nel tooltip lo stesso valore in core, l'unità delle barre (su 32 core logici un
-            // thread sempre al lavoro è il 3 %, cioè 1 core)
+            // un programma per riga: i processi con lo stesso nome sommati, col loro numero accanto. A schermo la percentuale della
+            // CPU; nel tooltip lo stesso valore in core, l'unità delle barre (su 32 core logici un thread sempre al lavoro è il 3 %,
+            // cioè 1 core). Dietro la riga il peso come istogramma: per la CPU la scala arriva almeno al 4 %, così a PC fermo le
+            // righe non si riempiono per un decimo di punto
             int processors = Environment.ProcessorCount;
-            TopCpuList.ItemsSource = topCpu.Select(p => new ProcessRow
+            double cpuTop = Math.Max(4, topCpu.Count > 0 ? topCpu[0].CpuPercent : 0);
+            double ramTop = Math.Max(1, topRam.Count > 0 ? topRam[0].WorkingSetBytes : 0);
+            TopCpuList.ItemsSource = topCpu.Select(p => new ProcessRow(p, p.CpuPercent / cpuTop)
             {
-                Pid = p.Pid,
-                Name = p.Name,
                 Value = $"{p.CpuPercent,5:0.0}%",
-                Tip = $"{p.CpuPercent * processors / 100:0.00} cores: how many full cores this process is worth",
-                Slot = _metrics.CoreSamplingAvailable ? Array.IndexOf(_slotPids, p.Pid) : -2
+                Tip = $"{p.CpuPercent * processors / 100:0.00} cores: how many full cores this program is worth" + ProcessesNote(p),
+                Slot = _metrics.CoreSamplingAvailable ? Array.FindIndex(_slotNames, n => string.Equals(n, p.Name, StringComparison.OrdinalIgnoreCase)) : -2
             }).ToArray();
-            TopRamList.ItemsSource = _proc.TopByMemory.Select(p => new ProcessRow
+            TopRamList.ItemsSource = topRam.Select(p => new ProcessRow(p, p.WorkingSetBytes / ramTop)
             {
-                Pid = p.Pid,
-                Name = p.Name,
-                Value = FmtRam(p.WorkingSetBytes)
+                Value = FmtRam(p.WorkingSetBytes),
+                Tip = p.Pids.Length > 1
+                    ? $"{p.Pids.Length} processes, their memory added up: what they share counts more than once"
+                    : null
             }).ToArray();
         }
         catch (Exception ex)
@@ -417,21 +521,28 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         }
     }
 
-    // nei colori delle barre dei core fino a tre processi di Top CPU: entra chi usa almeno mezzo core, esce chi scende sotto un
+    private static string ProcessesNote(ProgramSample p) => p.Pids.Length > 1 ? $"\n{p.Pids.Length} processes, added up" : "";
+
+    // nei colori delle barre dei core fino a tre programmi di Top CPU: entra chi usa almeno mezzo core, esce chi scende sotto un
     // quarto (due soglie, così chi sta a cavallo non lampeggia); chi esce libera il suo colore, chi entra ne prende uno libero.
-    // Il campionamento del kernel resta acceso solo finché c'è almeno un processo da seguire
-    private void TrackLeaders(IReadOnlyList<ProcessSample> top)
+    // Un programma porta nel suo colore tutti i suoi processi. Il campionamento del kernel resta acceso solo finché c'è almeno
+    // un programma da seguire
+    private void TrackLeaders(IReadOnlyList<ProgramSample> top)
     {
         if (!_metrics.CoreSamplingAvailable) return;
         int processors = Environment.ProcessorCount;
+        int SlotOf(string name) => Array.FindIndex(_slotNames, n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase));
         var leaders = top
-            .Where(p => p.CpuPercent * processors / 100 >= (Array.IndexOf(_slotPids, p.Pid) >= 0 ? TrackUntilCores : TrackFromCores))
-            .Take(CoreSampler.Slots).Select(p => p.Pid).ToArray();
-        for (int s = 0; s < _slotPids.Length; s++)
-            if (Array.IndexOf(leaders, _slotPids[s]) < 0) _slotPids[s] = -1;
-        foreach (int pid in leaders)
-            if (Array.IndexOf(_slotPids, pid) < 0) _slotPids[Array.IndexOf(_slotPids, -1)] = pid;
-        _metrics.TrackProcesses(_slotPids);
+            .Where(p => p.CpuPercent * processors / 100 >= (SlotOf(p.Name) >= 0 ? TrackUntilCores : TrackFromCores))
+            .Take(CoreSampler.Slots).ToArray();
+        for (int s = 0; s < _slotNames.Length; s++)
+            if (_slotNames[s] is { } name && !leaders.Any(l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase))) _slotNames[s] = null;
+        foreach (var leader in leaders)
+            if (SlotOf(leader.Name) < 0) _slotNames[Array.IndexOf(_slotNames, null)] = leader.Name;
+        var pids = _slotNames
+            .Select(name => name is null ? Array.Empty<int>() : leaders.First(l => string.Equals(l.Name, name, StringComparison.OrdinalIgnoreCase)).Pids)
+            .ToArray();
+        _metrics.TrackProcesses(_slotNames, pids);
         _metrics.SetCoreSampling(leaders.Length > 0);
     }
 
@@ -618,13 +729,11 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
         foreach (var (element, min) in graphs) element.Width = min;
         // i valori che crescono si misurano col loro testo più lungo: una misura presa a traffico basso o subito dopo l'avvio non
         // taglia niente quando arrivano i MB/s o i giorni di uptime. Un valore che su questo PC non c'è (vuoto) resta vuoto
-        double fast = 999.9 * 1024 * 1024;
+        // (i valori nella colonna del testo non contano più: la colonna è larga 168 e loro ci stanno per costruzione)
         var widest = new (System.Windows.Controls.TextBlock Block, string Text)[]
         {
-            (CpuValue, $"{100.0:0.0}%"), (RamValue, "100%"), (GpuValue, "100%"),
-            (NetValue, $"↓ {Fmt(fast)}  ↑ {Fmt(fast)}"), (DiskValue, $"↓ {Fmt(fast)}  ↑ {Fmt(fast)}"),
-            (NetPing, "ping 999 ms"), (UptimeText, FormatUptime(new TimeSpan(99, 23, 59, 0))), (PowerText, "PC ~999 W"),
-            (CpuPower, $"{999.9:0.0}W"), (CpuTemp, "100°C"), (GpuTemp, "100°C"), (DiskTemp, "100°C")
+            (UptimeText, FormatUptime(new TimeSpan(99, 23, 59, 0))), (PowerText, "PC ~999 W"),
+            (NetAddr, "local 255.255.255.255 · pub 255.255.255.255")
         };
         var shown = widest.Select(w => w.Block.Text).ToArray();
         for (int i = 0; i < widest.Length; i++)
@@ -676,7 +785,7 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
     // i grafici, che si accorciano quando il widget si stringe, con la larghezza minima che conservano adattando la misura
     private IEnumerable<(FrameworkElement Element, double Min)> Graphs()
     {
-        foreach (var graph in new FrameworkElement[] { CpuSpark, RamSpark, GpuSpark, NetSpark, DiskSpark, CoreBars, RamBar })
+        foreach (var graph in new FrameworkElement[] { CpuSpark, RamSpark, GpuSpark, NetSpark, DiskSpark, CoreBars, RamBar, GpuVramBar })
             yield return (graph, FitGraphWidth);
         foreach (var bar in Descendants<System.Windows.Controls.ProgressBar>(DriveList))
             yield return (bar, FitDriveBarWidth);
@@ -781,22 +890,31 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
     {
         var row = ExtractRow(sender);
         if (row is null) return;
+        // una riga è un programma: la conferma dice quanti processi chiude
+        int count = row.Pids.Length;
         var result = MessageBox.Show(
-            $"End {row.Name} (PID {row.Pid})?",
+            count > 1 ? $"End {row.Name}? All its {count} processes will be closed." : $"End {row.Name} (PID {row.Pid})?",
             "Confirm",
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
         if (result != MessageBoxResult.Yes) return;
-        try
+        int failed = 0;
+        string? error = null;
+        foreach (int pid in row.Pids)
         {
-            using var p = System.Diagnostics.Process.GetProcessById(row.Pid);
-            p.Kill();
+            try
+            {
+                using var p = System.Diagnostics.Process.GetProcessById(pid);
+                // l'elenco ha fino a cinque secondi: un numero di processo può essere passato a un altro programma, che non si tocca
+                if (!string.Equals(p.ProcessName, row.Name, StringComparison.OrdinalIgnoreCase)) continue;
+                p.Kill();
+            }
+            catch (ArgumentException) { /* già chiuso */ }
+            catch (Exception ex) { failed++; error ??= ex.Message; }
         }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Couldn't end the process: {ex.Message}", "Error",
+        if (failed > 0)
+            MessageBox.Show(count > 1 ? $"Couldn't end {failed} of {count} processes: {error}" : $"Couldn't end the process: {error}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
-        }
     }
 
     private void ProcSearch_Click(object sender, RoutedEventArgs e)
@@ -880,14 +998,35 @@ public partial class MainWindow : Reticle.Wpf.ReticleWindow
     }
 }
 
+/// <summary>Una riga di Top CPU o Top RAM: un programma, cioè tutti i processi con lo stesso nome.</summary>
 internal sealed class ProcessRow
 {
-    public int Pid { get; init; }
-    public string Name { get; init; } = string.Empty;
+    public ProcessRow(ProgramSample program, double weight)
+    {
+        Name = program.Name;
+        Pids = program.Pids;
+        Pid = program.Pids.Length > 0 ? program.Pids[0] : 0;
+        Count = program.Pids.Length > 1 ? $" ×{program.Pids.Length}" : "";
+        EndLabel = program.Pids.Length > 1 ? $"End all {program.Pids.Length} processes" : "End process";
+        weight = double.IsNaN(weight) ? 0 : Math.Clamp(weight, 0, 1);
+        Fill = new GridLength(weight, GridUnitType.Star);
+        Rest = new GridLength(1 - weight, GridUnitType.Star);
+    }
+
+    /// <summary>Il processo più pesante del programma: quello di cui si aprono cartella e proprietà.</summary>
+    public int Pid { get; }
+    public int[] Pids { get; }
+    public string Name { get; }
+    /// <summary>" ×38" se i processi sono più di uno, altrimenti vuoto.</summary>
+    public string Count { get; }
+    public string EndLabel { get; }
     public string Value { get; init; } = string.Empty;
     public string? Tip { get; init; }
-    /// <summary>Solo Top CPU: il colore del processo nelle barre dei core (0–2), -1 se non è seguito, -2 senza campionamento.</summary>
+    /// <summary>Solo Top CPU: il colore del programma nelle barre dei core (0–2), -1 se non è seguito, -2 senza campionamento.</summary>
     public int Slot { get; init; } = -2;
+    /// <summary>Il peso della riga come istogramma: le due colonne a stella, piena e vuota, dietro il testo.</summary>
+    public GridLength Fill { get; }
+    public GridLength Rest { get; }
 }
 
 internal sealed class DriveRow

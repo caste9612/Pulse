@@ -11,7 +11,7 @@ small window that starts with Windows: it shows CPU per core, RAM, GPU, network 
 last minute, and uses about 2% of one core.
 
 <p>
-  <img src="docs/screenshots/dark.webp" width="420" alt="Pulse running as administrator: CPU with temperature, power and per-core bars colored by process, RAM, GPU, network, disk and top processes" />
+  <img src="docs/screenshots/dark.webp" width="420" alt="Pulse running as administrator: CPU with temperature, power and per-core bars colored by program, RAM, GPU, network and disk with mirrored graphs, top programs" />
   <img src="docs/screenshots/light.webp" width="420" alt="Pulse with the light theme" />
 </p>
 
@@ -33,18 +33,22 @@ Download `Setup-Pulse-vX.Y.Z.exe` (installer) or `Pulse-vX.Y.Z-portable.zip` fro
 
 - **CPU**: usage, clock, temperature and power; one bar per logical processor (the threads of a core side by
   side) and the load counted in full cores. As administrator the bars also show, in color, how much of each
-  core the busiest processes take.
+  core the busiest programs take.
 - **RAM**: usage, available memory and the composition bar of Task Manager (in use, modified, cached, free);
   the tooltip adds committed memory and page file usage.
-- **GPU**: usage, video memory, temperature, clocks and power; NVIDIA cards are read directly through NVML,
-  and on a PC without a graphics card Pulse shows the integrated GPU.
+- **GPU**: usage, temperature, video memory with its bar and power, clocks in the tooltip; NVIDIA cards are
+  read directly through NVML, and on a PC without a graphics card Pulse shows the integrated GPU.
 - **Network**: download and upload speed, Wi-Fi name and signal, local and public IP, ping.
 - **Disk**: read and write speed, free space on each drive.
-- **Top processes**: the six using the most CPU and the most memory, every five seconds; right-click one to
-  open its folder, see its properties or end it.
+- **Top programs**: the six using the most CPU and the most memory, every five seconds, with the processes
+  of the same program added up and counted ("chrome ×21"); right-click one to open its folder, see its
+  properties or end it.
 - **System**: uptime and an estimate of the whole PC's power draw.
 
-Every value has a graph of the last 60 seconds. The header has a **fit** button (the smallest size that shows
+Every value has a graph of the last 60 seconds, all five starting at the same place: load and temperature for
+CPU and GPU, download over upload and read over write for network and disk, on a scale written in the corner.
+Behind each value its level of the moment, with a tick on the highest of the last minute. The header has a
+**fit** button (the smallest size that shows
 everything) and a **corner** button (sends the widget to a corner of its screen). The tray menu switches
 between dark, light and Windows theme, opens *Appearance…* (accent, transparency, density) and toggles
 *Always on top* and *Start with Windows*.
@@ -71,7 +75,7 @@ its tasks in [docs/INSTALLER.md](docs/INSTALLER.md).
 
 ## Footprint
 
-On the reference PC (Ryzen 9 7950X, RTX 5070 Ti, Windows 11), v1.3.0 uses about 2.1% of one core with the
+On the reference PC (Ryzen 9 7950X, RTX 5070 Ti, Windows 11), v1.4.0 uses about 1.7% of one core with the
 widget visible and 1.5% hidden in the tray, with about 130 MB of private memory. The metrics are read with direct
 Win32 calls instead of .NET's PerformanceCounter or WMI, and the slower ones are polled less often. The
 measurements of each release and the choices behind them are in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).

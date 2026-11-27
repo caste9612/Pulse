@@ -5,6 +5,37 @@ All notable changes to Pulse will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.4.0] - 2026-11-27
+
+The panel redrawn: the same information, each piece in a fixed place. Nothing changes in what Pulse reads or how.
+
+### Changed
+- **A fixed column for the text**: every metric (CPU, RAM, GPU, NET, DSK) has the same left column, 168 units wide, and its graph takes the rest, so the five graphs start and end at the same place. In the column the label, the main value and the second value (temperature, GB in use) are right-aligned in columns of their own: a value that gets longer no longer pushes the ones after it. Under each metric there is one detail line, always in the same spot: "≈ 1.5 cores · 4.50 GHz · 65 W", "47.9 GB available of 63.1 GB", "VRAM 2.7 / 15.9 GB · 43 W", "Ethernet · ping 21 ms", "SSD 41°C". Until v1.3.3 the values followed one another on a row, and v1.3.2 had moved temperatures and power to the line below so that they wouldn't push the graph: in a column of their own the temperatures are back next to the value, and the graph doesn't move.
+- **Network and disk rates one above the other**, in on top (↓) and out below (↑), in the size of the second values; the Wi-Fi name and the addresses moved under the network graph.
+- ***Top CPU* and *Top RAM* list programs, not processes**: the processes with the same name are added up, with their number next to the name ("chrome ×21"). A browser or an editor is dozens of processes, and one at a time they never showed their real weight; the same name no longer fills three rows either. The memory is the sum of the working sets, and the tooltip says that what the processes share counts more than once. In the right-click menu *Open file location* and *Properties* are those of the heaviest process of the program, and *End* closes them all: the menu item and the confirmation say how many, and a process ID that has passed to another program in the meantime is left alone.
+- **The colours in the core bars follow the programs**: from half a core up, as before, a program of *Top CPU* gets a colour and brings all its processes into it (the kernel sampling maps each of them to the colour of its program). Checked on a test build run as administrator next to the installed Pulse, with three programs above half a core, one of three processes and one of two, each process tied to a core of its own: three bars in the first colour, two in the second, one in the third. The kernel session opened with them and closed by itself when they stopped, and the system's profiling interval went back to its 1 ms.
+- **The GPU clocks are in the tooltip** of the GPU row, no longer in view, with the name of the GPU; video memory (or "shared", for an integrated GPU) and power stay on the detail line. The name of an integrated GPU, in view since v1.3.2, is under the GPU graph, where a graphics card has its memory bar. The tooltip of the CPU detail line says which clock is shown, as the clock's own tooltip did.
+- **The drive bars are the same length**: the "free of" texts share one column, as wide as the longest.
+- **Fit button**: 422 × 568 on the reference PC (446 × 557 until v1.3.3). The text column is 168 units by construction, so only the header and the address line are still measured at their longest text. A widget left at the fitted height of an earlier version shows a scroll bar until *Fit* is pressed again (11 units more); the space between the metrics went from 7 to 6 to keep the difference small.
+
+### Added
+- **The level behind the text**: behind the label and the values of each metric the series colour spreads from the left in proportion to the value, light enough to read the text over it and solid only along the bottom edge, and a small tick marks the highest value of the last minute. For CPU, RAM and GPU the scale is 0 to 100 %; network and disk have one level per direction on a logarithmic scale from 1 KB/s to 1 GB/s, so small traffic shows too (the graph next to it has the linear scale), and their tick is a short dash on the bottom edge: in rows half as high a taller one would end up over the digits. `Controls/LevelTint.cs`.
+- **Network and disk graphs mirrored**: in (downloaded, read) above the middle line, out (uploaded, written) below, until now one curve with the sum of the two. The scale is written in the corner of the graph: the smallest round one (100, 200, 500 KB/s, 1, 2, 5 MB/s … 10 GB/s) that holds the highest value of the minute, which so takes at least two fifths of the height. It never goes below 100 KB/s: a quiet minute stays flat instead of being stretched to the full height. Straight lines from one second to the next. `Controls/MirrorSpark.cs`.
+- **Temperature in the CPU and GPU graphs**: a thin line in the temperature colour on the same 0 to 100 scale as the load (°C), from the readings of the last minute; broken where there is no reading, absent when the sensor isn't available.
+- **Time grid and ruler**: a vertical line every ten seconds in the five graphs, and under the last one the ruler ("50 s" … "now"), which holds for all five.
+- **VRAM bar** under the GPU graph, next to its detail line, like the core bars under the CPU graph and the memory bar under the RAM one.
+- **Weight bars in *Top CPU* and *Top RAM***: behind each row a bar in the series colour, relative to the first row; for the CPU the scale reaches at least 4 %, so with the PC idle the rows don't fill up for a tenth of a point.
+
+### Removed
+- The ruler line between the drives and *Top CPU* / *Top RAM*.
+
+### Performance (Ryzen 9 7950X reference, PC idle, same 514 × 573 window, v1.3.3 vs v1.4.0 alternated on 26 and 27/11/2026: four 45 s rounds each with the widget visible, two hidden in the tray, not elevated)
+- CPU with the widget visible: 1.71% → 1.65% of one core; hidden in the tray: 1.43% → 1.51%. No difference the method can see: single rounds with the widget visible went from 1.46 to 2.00, v1.4.0 came out lower in three of the four pairs, and hidden in one of the two. The new panel draws more and reads nothing new.
+- GPU (3D engine) of Pulse: 0.04% → 0.04%, with one round of the four at 0.15% while the compositor was busier too; dedicated video memory: 17 → 16 MB
+- Private memory: 131 → 132 MB; working set: 213 → 218 MB; handles: about 920 in both
+- Cold start: ~500 → ~530 ms
+- Exe size: 10.54 → 10.59 MB
+- The compositor (dwm) says nothing here: 2.2–5.9% of one core with either version on screen, and 1.5–4.9% with the widget hidden, when neither draws.
 ## [v1.3.3] - 2026-10-12
 
 ### Added

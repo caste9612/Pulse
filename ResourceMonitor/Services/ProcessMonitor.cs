@@ -13,13 +13,26 @@ public sealed class ProcessSample
     public long WorkingSetBytes { get; set; }
 }
 
+/// <summary>Un programma: tutti i processi con lo stesso nome, sommati. Un browser o un editor sono decine di processi, e uno
+/// alla volta non compaiono mai col loro peso vero.</summary>
+public sealed class ProgramSample
+{
+    public string Name { get; init; } = string.Empty;
+    public double CpuPercent { get; init; }
+    /// <summary>La somma dei working set: la memoria condivisa tra i processi dello stesso programma conta più di una volta.</summary>
+    public long WorkingSetBytes { get; init; }
+    /// <summary>I processi del programma, dal più pesante (CPU, poi memoria): il primo è quello di cui si aprono cartella e
+    /// proprietà.</summary>
+    public int[] Pids { get; init; } = Array.Empty<int>();
+}
+
 public sealed class ProcessMonitor
 {
     private readonly Dictionary<int, (TimeSpan total, DateTime ts)> _previous = new();
     private readonly int _cpuCount = Environment.ProcessorCount;
 
-    public IReadOnlyList<ProcessSample> TopByCpu { get; private set; } = Array.Empty<ProcessSample>();
-    public IReadOnlyList<ProcessSample> TopByMemory { get; private set; } = Array.Empty<ProcessSample>();
+    public IReadOnlyList<ProgramSample> TopByCpu { get; private set; } = Array.Empty<ProgramSample>();
+    public IReadOnlyList<ProgramSample> TopByMemory { get; private set; } = Array.Empty<ProgramSample>();
 
     public void Update()
     {
@@ -70,7 +83,19 @@ public sealed class ProcessMonitor
         _previous.Clear();
         foreach (var kv in current) _previous[kv.Key] = kv.Value;
 
-        TopByCpu = samples.OrderByDescending(s => s.CpuPercent).Take(6).ToArray();
-        TopByMemory = samples.OrderByDescending(s => s.WorkingSetBytes).Take(6).ToArray();
+        // per nome: i nomi dei processi di Windows non distinguono maiuscole e minuscole
+        var programs = samples
+            .GroupBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new ProgramSample
+            {
+                Name = g.Key,
+                CpuPercent = g.Sum(s => s.CpuPercent),
+                WorkingSetBytes = g.Sum(s => s.WorkingSetBytes),
+                Pids = g.OrderByDescending(s => s.CpuPercent).ThenByDescending(s => s.WorkingSetBytes).Select(s => s.Pid).ToArray()
+            })
+            .ToList();
+
+        TopByCpu = programs.OrderByDescending(s => s.CpuPercent).Take(6).ToArray();
+        TopByMemory = programs.OrderByDescending(s => s.WorkingSetBytes).Take(6).ToArray();
     }
 }

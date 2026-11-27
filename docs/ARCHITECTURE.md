@@ -9,8 +9,8 @@ How Pulse is structured under the hood.
                          │  MainWindow (ReticleWindow, Mica)   │
                          │                                     │
                          │  ┌──────────────────┐               │
-                         │  │  Sparkline x5    │  ◄── values   │
-                         │  │  (custom render) │      arrays   │
+                         │  │  Sparkline x3,   │  ◄── values   │
+                         │  │  MirrorSpark x2  │      arrays   │
                          │  └──────────────────┘               │
                          │  ┌──────────────────┐               │
                          │  │  TextBlocks +    │  ◄── strings  │
@@ -81,10 +81,16 @@ Performance log: ticks that exceed thresholds (50 ms metrics tick, 200 ms hardwa
 
 1. **MetricsService timer fires** (1 s, UI thread) → `NativeMetrics` reads the CPU times (`GetSystemTimes`), the times of every logical processor (`NtQuerySystemInformation`, `SystemProcessorPerformanceInformation`), memory (`GlobalMemoryStatusEx`, `GetPerformanceInfo` for the committed memory, `NtQuerySystemInformation` for the memory lists, `SystemMemoryListInformation`, and the page files, `SystemPageFileInformation`), the system-wide I/O byte counters (`NtQuerySystemInformation`, `SystemPerformanceInformation`), the counters of the physical adapters that are up (`GetIfEntry2`; which adapters, `GetIfTable2` says every 10 s and as soon as one goes down: reading the whole table every second cost 2.4–3 ms with 64 interfaces, with peaks over 100 ms) and the clock Windows reports (`CallNtPowerInformation`, the last fallback for the CPU clock). CPU %, the per-core loads and the disk/network rates come from the delta with the previous sample. Which logical processors share a physical core is read once, at startup (`GetLogicalProcessorInformationEx`). With Pulse elevated, `CoreSampler` adds which processes ran on each core (see below).
 2. Raises `Updated` event.
-3. `MainWindow.OnMetricsUpdated` updates TextBlocks, assigns a fresh `ToArray()` of each 60-value history to `Sparkline.Values` and the fresh per-core array to `CoreBars.Values` (both trigger `OnRender`).
+3. `MainWindow.OnMetricsUpdated` updates TextBlocks and assigns a fresh `ToArray()` of each 60-value history to its graph: load and temperature to the three `Sparkline`s (CPU, RAM, GPU), in and out to the two `MirrorSpark`s (NET, DSK), kept as separate histories in bytes per second. The same tick sets the level behind each metric (`LevelTint`: the value now and the highest of its history) and the fresh per-core array of `CoreBars`. Every assignment triggers `OnRender`.
 4. **Slow tick fires** (2 s, separate timer) → background `Task.Run(_hw.Update)` (LHM, and the average CPU speed when LHM has no core clocks), then `_net.UpdateAsync()`, then back on the UI thread to update temp/clock/watt/IP labels.
-5. `MetricsService.GpuExternal` and `VramUsedExternalGb` are set from `HardwareMonitor` outputs so the GPU sparkline still updates on the 1s tick.
-6. **Process tick** (5 s) and **drive tick** (30 s) scan on `Task.Run`, then replace the items of the *Top CPU* / *Top RAM* panels and of the drive list.
+5. `MetricsService.GpuExternal`, `VramUsedExternalGb`, `CpuTempExternal` and `GpuTempExternal` are set from `HardwareMonitor` outputs, so the GPU sparkline and the two temperature histories still advance on the 1 s tick (`NaN` when there is no reading).
+6. **Process tick** (5 s) and **drive tick** (30 s) scan on `Task.Run`, then replace the items of the *Top CPU* / *Top RAM* panels and of the drive list. `ProcessMonitor` samples every process as before, then adds up the processes with the same name (case-insensitive) into one `ProgramSample`: CPU and working set summed, the process IDs ordered from the heaviest. A row of the panels is a program.
+
+## The panel layout
+
+From v1.4.0 every metric is a `Grid` with the same three columns: 168 units of text, a 12-unit gap and the graph (`*`). Inside the text column a second grid (38, 70, `*`) holds the label, the main value and the second value, the last two right-aligned, so a value that gets longer never moves another one and the five graphs start at the same place. The row under it has the one detail line of the metric on the left and, under the graph, its bar (cores, memory, VRAM), the addresses (NET) or the time ruler (DSK). An integrated GPU has no memory of its own to draw a bar for: its name, which says which GPU is shown on a PC without a graphics card, takes that place; the name and the clocks of a graphics card are in the tooltip of the GPU row. The text column fits its values by construction, so the Fit button measures only the header and the address line at their longest text.
+
+`Controls/LevelTint.cs` sits behind the text of each metric: a track in the series colour at 5 %, the same colour at 18 % from the left for `Value` (0 to 1) of the width, solid only on a 2-unit line along the bottom, and a small tick at `Peak`, the highest value of the 60-second history (`TickWidth` × `TickHeight`, 2 × 6 units). No vertical edge crosses the text. NET and DSK have two of them, one per direction (the second at 60 % strength), starting after the label and the arrows, with the tick as a 4 × 2 dash on the bottom edge: in 16-unit rows the digits reach almost to the edge, and a taller tick would end up over them; their value is logarithmic, `log10(KB/s) / 6`, i.e. 1 KB/s to 1 GB/s, because the graph next to them already has the linear scale.
 
 ## CPU speed without the MSR sensors
 
@@ -98,15 +104,19 @@ PDH gives the same values (checked side by side on the i9-11900K, to the decimal
 
 `Controls/Sparkline.cs` is a `FrameworkElement` (not UserControl) that overrides `OnRender(DrawingContext)`. It:
 
+- Draws the time grid first: a 1-pixel vertical line every `GridStep` samples (10, i.e. ten seconds) counted from the newest, in `GridBrush` (the text colour at 7 %, 10 % on the light theme)
 - Reads `Values` (an enumerable of 60 doubles) into a `Point[]` buffer reused between renders
-- Normalizes to `MaxValue` (100 for CPU, RAM and GPU) or auto-scales to the highest value (`AutoScale="True"` for NET and DSK)
+- Normalizes to `MaxValue` (100 for CPU, RAM and GPU; `AutoScale="True"`, the highest value, is no longer used by the widget)
 - Smooths the line: a cardinal spline (tension 0.5) written as cubic Bezier segments
 - Builds a `StreamGeometry` for the fill (closed area to baseline) and a second one for the stroke line
 - Draws the fill (vertical gradient from `FillOpacity` to transparent), the stroke and a dot with a halo on the last value (`ShowEndDot`)
+- Draws `TempValues`, when given (CPU and GPU), as a thin straight line in `TempStroke` on the same 0 to `MaxValue` scale, so the degrees read on the scale of the percentages; the line breaks where a value is `NaN`
 
 The gradient and halo brushes are cached and rebuilt only when the colour changes. The dotted grid under the curve is not drawn here: it is the `Reticle.Brush.Dots` background of the hosting border (`SparkBed` in `MainWindow.xaml`).
 
 `Values` is registered with `FrameworkPropertyMetadataOptions.AffectsRender`, so any assignment re-triggers render. The MainWindow assigns a fresh `ToArray()` of each history every tick.
+
+`Controls/MirrorSpark.cs` draws NET and DSK: `Above` (downloaded, read) over the middle line and `Below` (uploaded, written) under it, each as an area with its line, the second lighter, with the same time grid (`Sparkline.DrawGrid`). The lines are straight from one second to the next: the rates jump, and a smoothed curve would overshoot them. `MaxValue` is not the peak: `MainWindow.SetMirror` picks the smallest round scale that holds the highest value of both histories (1-2-5 steps from 100 KB/s to 10 GB/s) and writes it in the corner of the graph, so the peak of the minute takes at least two fifths of the height and a change of scale shows as text. With steps of ten the peak could be a tenth of a 16-unit half, two pixels: on the reference PC, where the I/O counters pass 100 MB/s almost every minute, the disk graph was a flat line on the 1 GB/s scale. Below 100 KB/s the scale doesn't go, so a quiet minute stays flat. Under the DSK graph a 12-column grid (4 parts, then eleven of 5: the 59 steps between 60 samples) places the ruler texts "50 s" … "now" on their grid lines; the ruler holds for all five graphs.
 
 `Controls/CoreBars.cs`, under the CPU sparkline, works the same way: one bar per logical processor from the latest sample (no history, no animation), the threads of one physical core side by side, a track in the series colour at 10 % and the fill from the bottom. Gaps and edges are rounded to device pixels, so the narrow bars stay sharp at any scale.
 
@@ -119,8 +129,8 @@ Windows keeps no cheap answer to "which process is on which core": the scheduler
 - It opens a real-time ETW session in system-logger mode (`EVENT_TRACE_SYSTEM_LOGGER_MODE`, so it doesn't take the single *NT Kernel Logger*), named `Pulse core sampling`, with the `PROFILE` and `THREAD` flags, only while there is a process to colour: `MainWindow` asks for it at each process tick (`MetricsService.SetCoreSampling`), and the session opens and closes off the UI thread. With the PC idle there is none, so nothing is sampled. Only an elevated Pulse can open it; otherwise the core tooltip says that the colours need the administrator.
 - The profiling interval is global: Pulse sets it to 10 ms (100 samples per second per logical processor, instead of Windows' default 1 ms) and puts the previous value back when the session closes, unless someone else changed it meanwhile. If it can't set it, it closes the session rather than run at ten times the samples.
 - A background thread runs `ProcessTrace`. Each `SampledProfile` event says which thread was running on which processor; the thread events (`DCStart` for the threads alive at startup, then `Start` and `End`) map threads to processes, and a thread seen nowhere is looked up once with `OpenThread` + `GetProcessIdOfThread`.
-- The samples are counted per core in four columns: the three tracked processes and everything else; idle samples don't count. Every second `MetricsService` takes the shares of the last two seconds, and `CoreBars` draws them as layers inside each bar, whose height still comes from the per-core times of `NtQuerySystemInformation`.
-- `MainWindow` chooses the tracked processes at each process tick: the processes of *Top CPU* that use at least half a core, up to three. A process keeps its colour until it drops below a quarter of a core, so one hovering around the threshold doesn't blink.
+- The samples are counted per core in four columns: the three tracked programs and everything else; idle samples don't count. A program is all the processes with its name: `Track` gets, for each colour, the name and the process IDs, and the process of a sample is looked up in a process-to-colour dictionary that is replaced as a whole at each process tick, never changed while the ETW thread reads it. The counts of a colour start again only when its program changes, not when one of its processes comes or goes. Every second `MetricsService` takes the shares of the last two seconds, and `CoreBars` draws them as layers inside each bar, whose height still comes from the per-core times of `NtQuerySystemInformation`.
+- `MainWindow` chooses the tracked programs at each process tick: the programs of *Top CPU* that use at least half a core (all their processes together), up to three. A program keeps its colour until it drops below a quarter of a core, so one hovering around the threshold doesn't blink.
 - The session is stopped when the last tracked process goes and on exit (`ExitApp`, with `ProcessExit` as a fallback). If Pulse is killed while sampling the session stays open without a consumer; an elevated Pulse closes it at its next start.
 - `PULSE_NO_CORE_SAMPLING=1` turns it off, like `PULSE_NO_LHM` and `PULSE_NO_PROC`.
 
