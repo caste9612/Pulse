@@ -91,13 +91,32 @@ struct Sb {
 struct Nice { float max; wchar_t label[16]; };
 Nice NiceScale(float maxBytes);
 
-// ---- colori (0xRRGGBB), quelli del tema scuro di Reticle usato da Pulse ----
-enum : unsigned {
-    C_BG = 0x121518, C_SURF2 = 0x191d21, C_LINE = 0x2c3338, C_LINESOFT = 0x1d2226, C_DOTS = 0x2b3237,
-    C_TEXT = 0xe9edee, C_TEXT2 = 0xaab3b8, C_MUTED = 0x6c7780, C_ACCENT = 0x3ddc84,
-    C_CPU = 0x4cc2ff, C_RAM = 0xb987f7, C_GPU = 0x3ddc84, C_NET = 0xf5c84b, C_DSK = 0xff5a52, C_TEMP = 0xff8a1f,
-    C_P0 = 0xff6eb4, C_P1 = 0xb8e55c, C_P2 = 0x8c9eff
+// ---- colori (0xRRGGBB): i due temi di Reticle usati da Pulse, scuro e chiaro ----
+struct Theme {
+    unsigned bg, surf2, line, lineSoft, dots, text, text2, muted, accent, cpu, ram, gpu, net, dsk, temp, p0, p1, p2;
+    float grid;                                                                      // forza delle righe del tempo nei grafici
+    bool light;
 };
+extern const Theme kDark, kLight;
+extern const Theme* g_theme;                                                         // quello in uso
+#define C_BG (g_theme->bg)
+#define C_SURF2 (g_theme->surf2)
+#define C_LINE (g_theme->line)
+#define C_LINESOFT (g_theme->lineSoft)
+#define C_DOTS (g_theme->dots)
+#define C_TEXT (g_theme->text)
+#define C_TEXT2 (g_theme->text2)
+#define C_MUTED (g_theme->muted)
+#define C_ACCENT (g_theme->accent)
+#define C_CPU (g_theme->cpu)
+#define C_RAM (g_theme->ram)
+#define C_GPU (g_theme->gpu)
+#define C_NET (g_theme->net)
+#define C_DSK (g_theme->dsk)
+#define C_TEMP (g_theme->temp)
+#define C_P0 (g_theme->p0)
+#define C_P1 (g_theme->p1)
+#define C_P2 (g_theme->p2)
 
 // ---- caratteri: i cinque file di Reticle che servono, dentro l'exe come risorse 101..105 ----
 enum FontFile { FF_BARLOW, FF_COND_SEMI, FF_COND_BOLD, FF_CHAKRA, FF_MONO };
@@ -129,9 +148,14 @@ static const Seg kIconSegs[] = {
 enum { NICONSEG = sizeof(kIconSegs) / sizeof(kIconSegs[0]) };
 
 // ---- il disegno (draw.cpp): Direct2D via software, fondo opaco ----
-enum { PANEL_W = 514 };                                                              // larghezza predefinita, in unità (96 per pollice)
-float PanelHeight(const State& s);                                                   // quanto è alto il contenuto, in unità
+enum { PANEL_W = 514, HEADER_H = 32, BTN_W = 28, NBTN = 4 };                         // misure in unità (96 per pollice)
+enum { BTN_FIT, BTN_CORNER, BTN_PIN, BTN_HIDE };                                     // i quattro bottoni della testata, da sinistra
+inline float BtnX(float panelW, int k) { return panelW - 4 - BTN_W * NBTN + k * BTN_W; }
+struct Ui { int hot; bool pinned; };                                                 // hot: il bottone sotto il mouse, -1 nessuno
+float PanelHeight(const State& s);                                                   // quanto è alto il contenuto
+float PanelFitWidth(const State& s);                                                 // la larghezza più stretta in cui niente è tagliato
 bool DrawCreate(HWND hwnd);
 void DrawResize(HWND hwnd);
-void DrawPaint(HWND hwnd, const State& s);
+void DrawThemeChanged();                                                             // il tema è cambiato: si rifanno letto puntinato e sfumature
+void DrawPaint(HWND hwnd, const State& s, const Ui& ui);
 bool DrawToDc(HDC memdc, int w, int h, const State& s);                              // una resa fuori schermo, senza finestra

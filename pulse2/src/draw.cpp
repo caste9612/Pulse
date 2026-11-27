@@ -21,6 +21,13 @@ static ID2D1SolidColorBrush* g_br;
 static ID2D1BitmapBrush* g_dots;
 static ID2D1LinearGradientBrush* g_grad[3];
 
+// scuro: quello di sempre. Chiaro: i colori di Pulse 1.4 col tema chiaro di Reticle, presi dalla sua finestra
+const Theme kDark = { 0x121518, 0x191d21, 0x2c3338, 0x1d2226, 0x2b3237, 0xe9edee, 0xaab3b8, 0x6c7780, 0x3ddc84,
+                      0x4cc2ff, 0xb987f7, 0x3ddc84, 0xf5c84b, 0xff5a52, 0xff8a1f, 0xff6eb4, 0xb8e55c, 0x8c9eff, .07f, false };
+const Theme kLight = { 0xe7e6e1, 0xd5d4cf, 0xbdbcb8, 0xd5d4cf, 0xcfcfca, 0x14161a, 0x50555d, 0x8a8f97, 0x008f67,
+                       0x0a8fc7, 0x7c3aed, 0x1b9e5a, 0xc9a000, 0xd62828, 0xc2410c, 0xc2185b, 0x5b8c00, 0x3949ab, .10f, true };
+const Theme* g_theme = &kDark;
+
 static D2D1_COLOR_F Col(unsigned rgb, float a = 1) { return D2D1::ColorF(rgb, a); }
 
 // i dati dei caratteri restano dove sono, nelle risorse dell'exe: questo oggetto dice a DirectWrite che non deve copiarli
@@ -85,7 +92,7 @@ static bool ResCreate(ID2D1RenderTarget* rt)
         if (SUCCEEDED(crt->GetBitmap(&bm))) { rt->CreateBitmapBrush(bm, D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP), &g_dots); bm->Release(); }
         crt->Release();
     }
-    static const unsigned gc[3] = { C_CPU, C_RAM, C_GPU };
+    const unsigned gc[3] = { C_CPU, C_RAM, C_GPU };
     for (int i = 0; i < 3; i++) {
         D2D1_GRADIENT_STOP stop[2] = { { 0, Col(gc[i], .28f) }, { 1, Col(gc[i], 0) } };
         ID2D1GradientStopCollection* sc = nullptr;
@@ -156,7 +163,7 @@ static void Bed(float x, float y, float w, float h)
 static void Grid(float x, float y, float w, float h)                                // una riga ogni 10 secondi, alla stessa x in tutti i grafici
 {
     const float xw = (w - 4) / (HIST - 1);
-    for (int k = 1; k <= 5; k++) R(floorf(x + (HIST - 1 - 10 * k) * xw + .5f), y, 1, h, C_TEXT, .07f);
+    for (int k = 1; k <= 5; k++) R(floorf(x + (HIST - 1 - 10 * k) * xw + .5f), y, 1, h, C_TEXT, g_theme->grid);
 }
 static ID2D1PathGeometry* Curve(const float* v, float x, float y, float w, float h, float max, bool closed)
 {
@@ -279,7 +286,7 @@ static void Top(float x, float y, float w, const wchar_t* legend, const Program*
     float lw = TextW(F_LABEL, legend);                                              // la legenda sta sulla cornice, come nei Panel di Reticle
     R(x + 8, y - 5, lw + 12, 11, C_BG);
     Text(F_LABEL, x + 14, y, legend, C_TEXT);
-    static const unsigned slotCol[3] = { C_P0, C_P1, C_P2 };
+    const unsigned slotCol[3] = { C_P0, C_P1, C_P2 };
     bool swatch = false; for (int i = 0; i < n; i++) if (rows[i].slot >= -1) swatch = true;
     float top = n ? (cpu ? rows[0].cpu : rows[0].ramMb) : 1; if (cpu && top < 4) top = 4; if (top <= 0) top = 1;   // per la CPU la scala arriva almeno al 4 %
     for (int i = 0; i < n; i++) {
@@ -309,7 +316,20 @@ static void Uptime(Sb& b, ULONGLONG sec)
 
 float PanelHeight(const State& s) { return 36 + 63 * 3 + 65 + 56 + (float)s.ndrive * 17 + 12 + TOP_H + 12; }
 
-static void DrawPanel(const State& s, float W, float H)
+// la larghezza più stretta in cui niente è tagliato, con ogni testo che cresce al suo più lungo (99 giorni di uptime, 999 W, due
+// indirizzi pieni): adattare a traffico basso o appena avviati non taglia niente dopo. La colonna del testo ci sta per costruzione
+float PanelFitWidth(const State& s)
+{
+    if (!InitFactories()) return PANEL_W;
+    float header = 36 + TextW(F_NAME, L"PULSE") + 14 + TextW(F_TEXT, L"uptime 99d 23h 59m") + 14 + TextW(F_TEXT, L"PC ~999 W") + 12 + BTN_W * NBTN + 4;
+    float addr = TextW(F_L2, L"local 255.255.255.255 \x00B7 pub 255.255.255.255"), graph = 192 + (addr > 96 ? addr : 96) + 14;
+    float dw = 0; for (int i = 0; i < s.ndrive; i++) { Sb b; b.gb(s.drives[i].freeGb).t(L" free of ").gb(s.drives[i].totalGb); float w = TextW(F_MONO, b.s); if (w > dw) dw = w; }
+    float drives = 12 + 30 + 60 + 8 + dw + 12, tops = 12 + 180 + 12 + 180 + 12;
+    float w = header; if (graph > w) w = graph; if (drives > w) w = drives; if (tops > w) w = tops;
+    return ceilf(w);
+}
+
+static void DrawPanel(const State& s, const Ui& ui, float W, float H)
 {
     const float X = 12, GX = 192, GW = W - GX - 14, RW = W - 2 * X, LH = 32;
     g_rt->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -326,7 +346,11 @@ static void DrawPanel(const State& s, float W, float H)
         float total = cpuW + (s.gpuOk && Has(s.gpuWatt) ? s.gpuWatt : 0) + 30;
         Sb b; b.t(measured ? L"PC " : L"PC ~").r(total).t(L" W"); Text(F_TEXT, hx, 16, b.s, C_TEMP);
     }
-    for (int k = 0; k < NICONSEG; k++) Stroke(kIconSegs[k].p, kIconSegs[k].n, W - 4 - 28 * 4 + kIconSegs[k].icon * 28 + 6, 8, 1.2f, C_TEXT2);
+    if (ui.hot >= 0 && ui.hot < NBTN) R(BtnX(W, ui.hot), 2, BTN_W, HEADER_H - 4, C_TEXT, .09f);      // il bottone sotto il mouse
+    for (int k = 0; k < NICONSEG; k++) {                                              // il fermo è nel colore dell'accento quando il widget sta in primo piano
+        int icon = kIconSegs[k].icon;
+        Stroke(kIconSegs[k].p, kIconSegs[k].n, BtnX(W, icon) + 6, 8, 1.2f, icon == BTN_PIN && ui.pinned ? C_ACCENT : C_TEXT2);
+    }
 
     float y = 36;
     // CPU
@@ -406,12 +430,13 @@ void DrawResize(HWND hwnd)
     RECT rc; GetClientRect(hwnd, &rc); float dpi = (float)GetDpiForWindow(hwnd);
     g_hrt->Resize(D2D1::SizeU(rc.right, rc.bottom)); g_hrt->SetDpi(dpi, dpi);
 }
-void DrawPaint(HWND hwnd, const State& s)
+void DrawThemeChanged() { if (g_hrt) ResCreate(g_hrt); }
+void DrawPaint(HWND hwnd, const State& s, const Ui& ui)
 {
     if (!g_hrt) return;
     g_rt = g_hrt;
     D2D1_SIZE_F sz = g_hrt->GetSize();
-    g_hrt->BeginDraw(); DrawPanel(s, sz.width, sz.height);
+    g_hrt->BeginDraw(); DrawPanel(s, ui, sz.width, sz.height);
     if (g_hrt->EndDraw() == D2DERR_RECREATE_TARGET) { Rel(g_hrt); g_rt = nullptr; DrawCreate(hwnd); }   // il bersaglio si è perso: si rifà
 }
 bool DrawToDc(HDC memdc, int w, int h, const State& s)
@@ -422,6 +447,7 @@ bool DrawToDc(HDC memdc, int w, int h, const State& s)
     if (FAILED(g_f->CreateDCRenderTarget(&rp, &dc))) return false;
     RECT rc = { 0, 0, w, h };
     if (FAILED(dc->BindDC(memdc, &rc)) || !ResCreate(dc)) return false;
-    dc->BeginDraw(); DrawPanel(s, (float)w, (float)h);
+    Ui ui = { -1, true };
+    dc->BeginDraw(); DrawPanel(s, ui, (float)w, (float)h);
     return SUCCEEDED(dc->EndDraw());
 }

@@ -1,4 +1,5 @@
-// I cinque file dei caratteri di Reticle che Pulse 2 usa (SIL Open Font License, come in licenses/).
+// L'icona, la stessa di Pulse 1.x, e i cinque file dei caratteri di Reticle che Pulse 2 usa (SIL Open Font License, come in licenses/).
+1 ICON "..\\ResourceMonitor\\Resources\\app.ico"
 101 RCDATA "fonts\\Barlow-Regular.ttf"
 102 RCDATA "fonts\\BarlowCondensed-SemiBold.ttf"
 103 RCDATA "fonts\\BarlowCondensed-Bold.ttf"

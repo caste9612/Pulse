@@ -17,7 +17,7 @@ rc /nologo /fo out\res.res src\res.rc || exit /b 1
 rem /MT: nessuna DLL del runtime C++ da installare; niente eccezioni ne' RTTI; ottimizzato per la dimensione
 set CF=/nologo /O1 /GS- /GR- /EHs-c- /MT /W3 /DUNICODE /D_UNICODE /Foout\
 set LF=/link /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF /INCREMENTAL:NO
-set LIBS=user32.lib gdi32.lib d2d1.lib dwrite.lib ntdll.lib iphlpapi.lib powrprof.lib winhttp.lib
+set LIBS=user32.lib gdi32.lib shell32.lib advapi32.lib dwmapi.lib d2d1.lib dwrite.lib ntdll.lib iphlpapi.lib powrprof.lib winhttp.lib
 
 cl %CF% src\main.cpp src\metrics.cpp src\slow.cpp src\draw.cpp out\res.res /Feout\Pulse2.exe %LF% %LIBS% || exit /b 1
 
