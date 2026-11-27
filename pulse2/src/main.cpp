@@ -13,6 +13,7 @@
 #include <dwmapi.h>
 #include <commctrl.h>
 #include <tlhelp32.h>
+#include "shared.h"
 
 FontData g_fontData[NFILE];
 static State g_state;
@@ -247,8 +248,13 @@ static void TipText(int region, Lb& b)
     switch (region) {
     case RG_POWER: b.t(L"Estimated total PC power: CPU + graphics card + about 30 W for the rest"); return;
     case RG_CPU_TEMP:
+        // perché manca: i registri della CPU li legge il processo dei sensori, da amministratore e col driver PawnIO
         if (Has(s.cpuTemp)) b.t(L"CPU temperature: also the thin line in the graph, on the same 0 to 100 scale as the load.");
-        else b.t(L"CPU temperature and power are read by Pulse's sensors process, which this build doesn't have yet.");
+        else if (!(s.sensorFlags & SF_ALIVE)) b.t(L"CPU temperature and power come from Pulse's sensors process (Pulse2.Sensors), which is not running.");
+        else if (!(s.sensorFlags & SF_PAWNIO) && !(s.sensorFlags & SF_ELEVATED)) b.t(L"CPU temperature and power need the PawnIO driver and the sensors process running as administrator.\nInstall PawnIO from pawnio.eu (or: winget install namazso.PawnIO).");
+        else if (!(s.sensorFlags & SF_PAWNIO)) b.t(L"CPU temperature and power need the PawnIO driver.\nInstall it from pawnio.eu (or: winget install namazso.PawnIO), then restart Pulse.");
+        else if (!(s.sensorFlags & SF_ELEVATED)) b.t(L"CPU temperature not available.\nThe sensors process must run as administrator to read it.");
+        else b.t(L"CPU temperature not available: the processor's sensors could not be read.");
         return;
     case RG_CORES: {
         int phys = 0; for (int i = 0; i < s.ncore; i++) if (i == 0 || s.phys[i] != s.phys[i - 1]) phys++;
@@ -257,7 +263,11 @@ static void TipText(int region, Lb& b)
         b.t(L": how many full cores the current work is worth.\nUnder the graph, ");
         b.t(phys < s.ncore ? L"one bar per logical core, those of the same physical core side by side" : L"one bar per core");
         b.t(L": many medium bars mean parallel work, a single full one a single thread.");
-        if (s.clockKind == 2) b.t(L"\nClock: the average speed of the cores at work, as in Task Manager.");
+        if ((s.sensorFlags & SF_ALIVE) && (s.sensorFlags & (SF_ELEVATED | SF_FAKE)) && !(s.sensorFlags & SF_NO_SAMPLING))
+            b.t(L"\nColours: the share of each core used by the Top CPU programs above half a core, up to three (the small square next to the name), sampled by the kernel 100 times a second, only while there is one; the rest in the CPU colour.");
+        else b.t(L"\nTo see in colour which Top CPU programs use the cores, the sensors process must run as administrator.");
+        if (s.clockKind == 3) b.t(L"\nClock of the fastest core.");
+        else if (s.clockKind == 2) b.t(L"\nClock: the average speed of the cores at work, as in Task Manager.");
         else if (s.clockKind == 1) b.t(L"\nClock reported by Windows (the base clock on many processors).");
         return; }
     case RG_RAM:
@@ -456,7 +466,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0; }
     case WM_ERASEBKGND: return 1;
     case WM_TIMER: {
-        MetricsTick(g_state); SlowCopy(g_state); FitHeight(hwnd);
+        MetricsTick(g_state); SlowCopy(g_state); SensorsExchange(g_state); FitHeight(hwnd);
         static ULONGLONG minute; if (g_state.uptimeSec / 60 != minute) { minute = g_state.uptimeSec / 60; TipsLayout(hwnd); }   // la riga della testata si allunga coi minuti
         if (IsWindowVisible(hwnd)) InvalidateRect(hwnd, nullptr, FALSE);            // nascosto nel tray legge, così il minuto è pronto quando torna, ma non disegna
         if (g_seconds && ++g_ticks >= (unsigned)g_seconds) DestroyWindow(hwnd);
@@ -609,7 +619,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
     if (const wchar_t* p = Find(cmd, L"--shot")) return Shot(p);
     if (const wchar_t* p = Find(cmd, L"--dump")) return Dump(p);
 
-    MetricsInit(g_state); SlowStart();
+    MetricsInit(g_state); SlowStart(); SensorsInit();
     g_ui.pinned = g_set.topmost;
 
     WNDCLASSEXW wc = { sizeof(wc) };

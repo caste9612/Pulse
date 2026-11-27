@@ -25,10 +25,28 @@ programs instead of processes) with Direct2D rendered by the CPU, on an opaque b
   **menu of a program** (open file location, properties, end, search online). *End* closes every process of the
   program, after a confirmation that says how many.
 
+## The sensors process
+
+What needs administrator rights is not in the panel: `sensors/` is a second, small program (`Pulse2.Sensors.exe`, .NET,
+no window), the only one meant to run elevated. It reads the CPU's registers with LibreHardwareMonitor and the PawnIO
+driver (temperature, package power, the clock of the fastest core) and samples the cores with the kernel, with the same
+`CoreSampler.cs` as Pulse 1.x, compiled from `ResourceMonitor/`, to know which program runs on which core.
+
+The two talk through a block of shared memory, `Local\Pulse2.Shared`, that the panel creates (`src/shared.h`): the
+panel writes which programs of *Top CPU* it wants in colour (those above half a core, up to three, with their process
+IDs), the sensors process answers with the three CPU values and, for every logical core, the share of each program.
+Each side writes only its own half, with a counter that is odd while a write is in progress. Without the sensors
+process, or with one that is not elevated, the panel works as before: the temperature reads `n/a` and the core bars
+have one colour; the tooltip says what is missing. When the panel is closed or silent for five seconds the sensors
+process reads nothing and keeps no kernel session open.
+
+Checked so far without rights only: with `--fake` (made-up values, to test the link: temperature and its line in the
+graph, power, clock, coloured core bars and the squares next to the programs) and with the real process not elevated
+(everything stays `n/a`, no errors). **The elevated run has not been done yet.**
+
 ## What is missing
 
-- **CPU temperature and power, and the colours of the programs in the core bars**: they need administrator rights, and
-  will come from a separate sensors process, the only elevated one. Until then the temperature reads `n/a`.
+- The elevated check of the sensors process, and the Scheduled Task that starts it at logon.
 - GPUs other than NVIDIA, the Wi-Fi name and signal, the SSD temperature.
 - The watch on display driver changes. A crashing NVML call is caught (`__try`) and turns the GPU readings off until
   the next start, instead of taking the process down.
@@ -50,10 +68,14 @@ programs instead of processes) with Direct2D rendered by the CPU, on an opaque b
 | `--shot <file.bmp>` | read for a second, render one frame off screen, save it and exit |
 | `--dump <file.txt>` | read for a second and write the readings, the regions and their tooltips as text |
 
-`PULSE_NO_PUBLIC_IP=1` keeps Pulse 2 from asking for the public address. The log is `%TEMP%\pulse2.log`.
+The sensors process builds with `dotnet build sensors` and takes `--fake` (made-up values instead of sensors and
+sampling) and `--seconds <n>`; its log is `%TEMP%\pulse2-sensors.log`.
+
+`PULSE_NO_PUBLIC_IP=1` keeps Pulse 2 from asking for the public address, `PULSE_NO_NVML=1` from loading the NVIDIA
+library. The log is `%TEMP%\pulse2.log`.
 
 ## First figures
 
 A look, not a measurement (one run of 70 s on the reference PC, 27/11/2026, next to the installed Pulse): first frame
 after about 50 ms, 37 MB of private memory, about 1% of one core in its first minute. Pulse 1.4.0 measured 132 MB and
-1.65%. Most of the 37 MB arrive with the NVIDIA library.
+1.65%. About 21 of the 37 MB arrive with the NVIDIA library: with `PULSE_NO_NVML=1` the same build had 16.6 MB.

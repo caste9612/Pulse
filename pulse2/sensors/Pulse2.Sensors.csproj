@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Il processo dei sensori di Pulse 2: l'unico che gira da amministratore. Legge temperatura, consumo e frequenze della CPU
+       con LibreHardwareMonitor e campiona i core col kernel (lo stesso CoreSampler di Pulse 1.x, compilato da lì), e passa tutto
+       al pannello attraverso la memoria condivisa che il pannello crea. Nessuna finestra. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Pulse2.Sensors</AssemblyName>
+    <RootNamespace>Pulse2.Sensors</RootNamespace>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <TieredPGO>false</TieredPGO>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <Compile Include="..\..\ResourceMonitor\Services\CoreSampler.cs" Link="Shared\CoreSampler.cs" />
+  </ItemGroup>
+
+</Project>

@@ -51,7 +51,7 @@ static void Tops(const Group* g, int n, bool byRam, Program* out, int& count)
         if (best < 0) break;
         used[best] = true;
         Program& p = out[count++];
-        lstrcpynW(p.name, g[best].name, PROGNAME); p.count = g[best].count; p.cpu = g[best].cpu; p.ramMb = g[best].ramMb; p.pid = g[best].pid; p.slot = -2;
+        lstrcpynW(p.name, g[best].name, PROGNAME); p.count = g[best].count; p.cpu = g[best].cpu; p.ramMb = g[best].ramMb; p.pid = g[best].pid; p.slot = -2; p.npid = 0;
     }
 }
 
@@ -103,6 +103,19 @@ static void ReadPrograms(SlowData& d)
     CopyMemory(g_seen, cur, ncur * sizeof(Seen)); g_nseen = ncur; g_seenAt = now;
     Tops(g_group, ngroup, false, d.topCpu, d.nTopCpu);
     Tops(g_group, ngroup, true, d.topRam, d.nTopRam);
+    // i processi di ogni programma di Top CPU: servono al campionamento dei core, che conta i campioni per processo
+    for (ULONG off = 0;;) {
+        const ProcInfo* p = (const ProcInfo*)(g_procBuf + off);
+        if (p->pid && p->image.Buffer && p->image.Length) {
+            wchar_t name[PROGNAME]; int n = p->image.Length / 2; if (n > PROGNAME - 1) n = PROGNAME - 1;
+            CopyMemory(name, p->image.Buffer, n * 2); name[n] = 0;
+            if (n > 4 && !lstrcmpiW(name + n - 4, L".exe")) name[n - 4] = 0;
+            for (int k = 0; k < d.nTopCpu; k++) if (!lstrcmpiW(d.topCpu[k].name, name)) { if (d.topCpu[k].npid < MAXPID) d.topCpu[k].pids[d.topCpu[k].npid++] = (DWORD)(ULONG_PTR)p->pid; break; }
+        }
+        if (!p->next) break;
+        off += p->next;
+        if (off + sizeof(ProcInfo) > len) break;
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -156,6 +169,7 @@ static bool NvReadUnsafe(SlowData& d)
 }
 static void ReadGpu(SlowData& d)
 {
+    if (!g_nv.tried && GetEnvironmentVariableW(L"PULSE_NO_NVML", nullptr, 0)) g_nv.dead = true;   // come in Pulse 1.x: per provare senza NVML
     if (g_nv.dead) { d.gpuOk = false; return; }
     bool ok = false;
     __try {

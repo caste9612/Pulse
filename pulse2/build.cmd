@@ -19,7 +19,7 @@ set CF=/nologo /O1 /GS- /GR- /EHs-c- /MT /W3 /DUNICODE /D_UNICODE /Foout\
 set LF=/link /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF /INCREMENTAL:NO
 set LIBS=user32.lib gdi32.lib shell32.lib advapi32.lib comctl32.lib dwmapi.lib d2d1.lib dwrite.lib ntdll.lib iphlpapi.lib powrprof.lib winhttp.lib
 
-cl %CF% src\main.cpp src\metrics.cpp src\slow.cpp src\draw.cpp out\res.res /Feout\Pulse2.exe %LF% %LIBS% || exit /b 1
+cl %CF% src\main.cpp src\metrics.cpp src\slow.cpp src\sensors.cpp src\draw.cpp out\res.res /Feout\Pulse2.exe %LF% %LIBS% || exit /b 1
 
 echo.
 for %%f in (out\*.exe) do echo %%~nxf  %%~zf byte

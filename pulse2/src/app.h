@@ -5,7 +5,7 @@
 #include <windows.h>
 #include <math.h>
 
-enum { HIST = 60, MAXCORE = 256, NTOP = 6, MAXDRIVE = 6, NFILE = 5, PROGNAME = 40 };
+enum { HIST = 60, MAXCORE = 256, NTOP = 6, MAXDRIVE = 6, NFILE = 5, PROGNAME = 40, MAXPID = 64 };
 // un valore che non c'è (temperatura senza sensore, consumo che nessuno legge): mai un numero inventato al suo posto
 const float NONE = -1;
 inline bool Has(float v) { return v >= 0; }
@@ -23,6 +23,7 @@ struct Program {
     float cpu;                          // percento di tutti i processori
     float ramMb;                        // somma dei working set
     DWORD pid;                          // il processo più pesante: quello di cui si aprono cartella e proprietà
+    DWORD pids[MAXPID]; int npid;       // i suoi processi (i primi 64), per il campionamento dei core; solo in Top CPU
     int slot;                           // colore nelle barre dei core: 0..2, -1 non seguito, -2 campionamento non disponibile
 };
 struct Drive { wchar_t name[4]; float freeGb, totalGb; };
@@ -33,7 +34,9 @@ struct State {
     float cpu, coresInUse;              // percento e somma dei carichi
     float cpuGhz;                       // 0 = non si sa
     int clockKind;                      // 1 = quella che dice Windows (su molti processori la nominale), 2 = la media dei core al lavoro
-    float cpuTemp, cpuWatt;             // NONE finché non c'è il processo dei sensori
+    float cpuTemp, cpuWatt;             // NONE senza il processo dei sensori
+    int sensorFlags;                    // 0 = il processo dei sensori non c'è; altrimenti i suoi SF_ (shared.h)
+    float share[MAXCORE][3];            // per core logico, la parte del carico di ciascun programma seguito (0..1)
     // RAM, in GB
     float ramPct, ramUsed, ramTotal, ramAvail;
     bool ramParts; float ramInUse, ramModified, ramStandby, ramFree;
@@ -61,6 +64,9 @@ void SlowStart();
 void SlowStop();
 void SlowCopy(State& s);                // porta nel pannello le ultime letture lente
 void SlowOnce();                        // un giro completo, subito (per --shot e --dump)
+// il dialogo col processo dei sensori, l'unico con i diritti di amministratore (sensors.cpp)
+void SensorsInit();
+void SensorsExchange(State& s);         // una volta al secondo, dopo le letture
 void LogLine(const char* s);            // %TEMP%\pulse2.log
 
 // ---- testi: un piccolo costruttore di stringhe, senza printf ----

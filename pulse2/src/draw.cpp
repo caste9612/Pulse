@@ -230,8 +230,15 @@ static void CoreBars(float x, float y, float w, float h, const State& s)
     float bw = (w - gaps) / n, fx = 0; if (bw < 1) bw = 1;
     for (int i = 0; i < n; i++) {
         float xx = floorf(x + fx + .5f), ww = floorf(x + fx + bw + .5f) - xx; if (ww < 1) ww = 1;
-        float hh = floorf(h * Clampf(s.cores[i], 0, 1) + .5f);
-        R(xx, y, ww, h, C_CPU, .13f); R(xx, y + h - hh, ww, hh, C_CPU);
+        float hh = floorf(h * Clampf(s.cores[i], 0, 1) + .5f), base = y + h;
+        R(xx, y, ww, h, C_CPU, .13f);
+        // a strati: dal basso la parte di ciascun programma seguito nel suo colore, il resto nel colore della CPU
+        const unsigned slotCol[3] = { C_P0, C_P1, C_P2 };
+        for (int k = 0; k < 3; k++) {
+            float ph = floorf(hh * Clampf(s.share[i][k], 0, 1) + .5f); if (ph > base - (y + h - hh)) ph = base - (y + h - hh);
+            if (ph > 0) { R(xx, base - ph, ww, ph, slotCol[k]); base -= ph; }
+        }
+        R(xx, y + h - hh, ww, base - (y + h - hh), C_CPU);
         fx += bw + (i + 1 < n && s.phys[i + 1] == s.phys[i] ? gapIn : gapOut);
     }
 }
