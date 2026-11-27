@@ -5,24 +5,27 @@
 //   --pos <x> <y>       posizione della finestra            --width <n>      larghezza in unità (predefinita 514)
 //   --theme dark|light  tema, al posto di quello salvato    --seconds <n>    si chiude da solo dopo n secondi
 //   --noactivate        non prende il fuoco quando si apre  --nosave         prova: non legge né scrive impostazioni, niente istanza unica
-//   --shot <file.bmp>   legge i dati per un secondo, disegna un fotogramma fuori schermo, lo salva ed esce (nessuna finestra)
+//   --shot <file.bmp>   legge i dati per un secondo, disegna un fotogramma fuori schermo, lo salva ed esce (nessuna finestra);
+//                       con --demo-ui disegna anche una riga sotto il mouse e la scelta dell'angolo aperta
 //   --dump <file.txt>   legge i dati per un secondo e li scrive come testo, per confrontarli con i contatori di Windows
+//   --bench <n>         disegna n fotogrammi di fila con dati finti sempre uguali e scrive nel log quanta CPU è costato ognuno
 #include "app.h"
 #include <windowsx.h>
 #include <shellapi.h>
 #include <dwmapi.h>
 #include <commctrl.h>
 #include <tlhelp32.h>
+#include <uxtheme.h>
 #include "shared.h"
 
 FontData g_fontData[NFILE];
 static State g_state;
-static Ui g_ui = { -1, true };
+static Ui g_ui = { -1, true, 0, false, -1 };
 static HWND g_hwnd;
 static HINSTANCE g_inst;
 static int g_seconds; static unsigned g_ticks;
-static bool g_nosave, g_noact;
-static int g_pressed = -1; static bool g_tracking;
+static bool g_nosave, g_noact, g_demoUi;
+static int g_pressed = -1, g_pressedArrow = -1; static bool g_tracking;
 static float g_minW = 420; static int g_minDrives = -1;
 static UINT g_msgTaskbar, g_msgShow;
 enum { WM_TRAY = WM_APP + 1 };
@@ -143,12 +146,27 @@ static bool WindowsIsLight()
     DWORD v = 0, n = sizeof(v);
     return RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &v, &n) == ERROR_SUCCESS && v != 0;
 }
+// I menu e i tooltip sono quelli di Windows: almeno nel tono del pannello, scuri col tema scuro. Per i menu Windows non ha una
+// chiamata documentata: sono le due funzioni di uxtheme che usa Esplora risorse (numeri 135 e 136, da Windows 10 1903); se mancano
+// i menu restano chiari, e basta
+static void ControlsTheme(bool light)
+{
+    static bool tried; static int (WINAPI* setMode)(int); static void (WINAPI* flush)();
+    if (!tried) {
+        tried = true;
+        if (HMODULE ux = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)) {
+            setMode = (int (WINAPI*)(int))GetProcAddress(ux, MAKEINTRESOURCEA(135)); flush = (void (WINAPI*)())GetProcAddress(ux, MAKEINTRESOURCEA(136));
+        }
+    }
+    if (setMode && flush) { setMode(light ? 3 : 2); flush(); }                      // 2 = scuro, 3 = chiaro
+    if (g_tip) SetWindowTheme(g_tip, light ? L"Explorer" : L"DarkMode_Explorer", nullptr);
+}
 static void ApplyTheme()
 {
     bool light = g_set.theme == 1 || (g_set.theme == 2 && WindowsIsLight());
     const Theme* t = light ? &kLight : &kDark;
     if (t == g_theme && g_hwnd) return;
-    g_theme = t;
+    g_theme = t; ControlsTheme(light);
     if (!g_hwnd) return;
     BOOL dark = !light; DwmSetWindowAttribute(g_hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
     DrawThemeChanged(); InvalidateRect(g_hwnd, nullptr, FALSE);
@@ -225,6 +243,7 @@ static void TipsCreate(HWND hwnd)
     g_tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, 0, 0, 0, 0, hwnd, nullptr, g_inst, nullptr);
     if (!g_tip) return;
     SendMessageW(g_tip, TTM_SETMAXTIPWIDTH, 0, Px(hwnd, 460)); SendMessageW(g_tip, TTM_SETDELAYTIME, TTDT_AUTOPOP, 30000);
+    SetWindowTheme(g_tip, g_theme->light ? L"Explorer" : L"DarkMode_Explorer", nullptr);
     TipsLayout(hwnd);
 }
 static int RegionAt(HWND hwnd, int px, int py)
@@ -401,14 +420,12 @@ static void TrayMenu(HWND hwnd, int x, int y)
     AppendMenuW(menu, MF_STRING, ID_EXIT, L"Exit");
     Popup(hwnd, menu, x, y);
 }
-static void CornerMenu(HWND hwnd)
+// la scelta dell'angolo: quattro frecce sotto il bottone, come in Pulse 1.x. Si chiude scegliendo, cliccando altrove, con Esc o
+// quando il mouse lascia il pannello
+static void SetPicker(HWND hwnd, bool open)
 {
-    HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, ID_CORNER + 0, L"Top left"); AppendMenuW(menu, MF_STRING, ID_CORNER + 1, L"Top right");
-    AppendMenuW(menu, MF_STRING, ID_CORNER + 2, L"Bottom left"); AppendMenuW(menu, MF_STRING, ID_CORNER + 3, L"Bottom right");
-    RECT rc; GetClientRect(hwnd, &rc);
-    POINT p = { Px(hwnd, BtnX(rc.right / Scale(hwnd), BTN_CORNER)), Px(hwnd, HEADER_H) }; ClientToScreen(hwnd, &p);
-    Popup(hwnd, menu, p.x, p.y);
+    if (g_ui.picker == open) return;
+    g_ui.picker = open; g_ui.hotArrow = -1; InvalidateRect(hwnd, nullptr, FALSE);
 }
 static void Command(HWND hwnd, int id)
 {
@@ -426,7 +443,7 @@ static void Button(HWND hwnd, int k)
 {
     switch (k) {
     case BTN_FIT: DoFit(hwnd); break;
-    case BTN_CORNER: CornerMenu(hwnd); break;
+    case BTN_CORNER: SetPicker(hwnd, !g_ui.picker); break;
     case BTN_PIN: SetTopmost(hwnd, !g_set.topmost); break;
     case BTN_HIDE: ShowPanel(hwnd, false); break;
     }
@@ -439,10 +456,20 @@ static int ButtonAt(HWND hwnd, int px, int py)
     if (y < 2 || y >= HEADER_H - 2 || x < BtnX(W, 0) || x >= BtnX(W, NBTN)) return -1;
     return (int)((x - BtnX(W, 0)) / BTN_W);
 }
-static void SetHot(HWND hwnd, int k)
+// la freccia della scelta dell'angolo sotto un punto, -1 se non c'è
+static int ArrowAt(HWND hwnd, int px, int py)
 {
-    if (k == g_ui.hot) return;
-    g_ui.hot = k; RECT rc; GetClientRect(hwnd, &rc); rc.bottom = Px(hwnd, HEADER_H); InvalidateRect(hwnd, &rc, FALSE);
+    if (!g_ui.picker) return -1;
+    RECT rc; GetClientRect(hwnd, &rc); float sc = Scale(hwnd), x = px / sc, y = py / sc, W = rc.right / sc;
+    for (int k = 0; k < 4; k++) { float cx, cy; PickerCell(W, k, cx, cy); if (x >= cx && x < cx + PICK_CELL && y >= cy && y < cy + PICK_CELL) return k; }
+    return -1;
+}
+// che cosa c'è sotto il mouse: un bottone, una freccia, una riga di programma. Si ridisegna solo se cambia
+static void SetHover(HWND hwnd, int button, int region, int arrow)
+{
+    if (region < RG_TOPCPU || !ProgramOf(region) || arrow >= 0) region = 0;         // si evidenziano solo le righe che hanno un programma
+    if (button == g_ui.hot && region == g_ui.hotRegion && arrow == g_ui.hotArrow) return;
+    g_ui.hot = button; g_ui.hotRegion = region; g_ui.hotArrow = arrow; InvalidateRect(hwnd, nullptr, FALSE);
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -459,7 +486,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return HTCLIENT; }
     case WM_NCLBUTTONDBLCLK: return 0;                                              // il doppio clic sulla testata non ingrandisce niente
     case WM_NCRBUTTONUP: return 0;
-    case WM_NCMOUSEMOVE: SetHot(hwnd, -1); break;
+    case WM_NCMOUSEMOVE: SetHover(hwnd, -1, 0, -1); break;
     case WM_GETMINMAXINFO: {
         MINMAXINFO* m = (MINMAXINFO*)lp; int h = Px(hwnd, PanelHeight(g_state));
         m->ptMinTrackSize.x = Px(hwnd, MinWidth()); m->ptMaxTrackSize.x = Px(hwnd, 1600); m->ptMinTrackSize.y = m->ptMaxTrackSize.y = h;
@@ -498,14 +525,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0; }
     case WM_MOUSEMOVE:
         if (!g_tracking) { TRACKMOUSEEVENT t = { sizeof(t), TME_LEAVE, hwnd, 0 }; g_tracking = TrackMouseEvent(&t) != 0; }
-        SetHot(hwnd, ButtonAt(hwnd, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)));
+        { int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp); SetHover(hwnd, ButtonAt(hwnd, x, y), RegionAt(hwnd, x, y), ArrowAt(hwnd, x, y)); }
         return 0;
-    case WM_MOUSELEAVE: g_tracking = false; SetHot(hwnd, -1); return 0;
-    case WM_LBUTTONDOWN: g_pressed = ButtonAt(hwnd, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); if (g_pressed >= 0) SetCapture(hwnd); return 0;
+    case WM_MOUSELEAVE: g_tracking = false; SetHover(hwnd, -1, 0, -1); if (GetCapture() != hwnd) SetPicker(hwnd, false); return 0;
+    case WM_KEYDOWN: if (wp == VK_ESCAPE) SetPicker(hwnd, false); return 0;
+    case WM_ACTIVATE: if (LOWORD(wp) == WA_INACTIVE) SetPicker(hwnd, false); break;
+    case WM_LBUTTONDOWN: {
+        int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+        g_pressedArrow = ArrowAt(hwnd, x, y); g_pressed = g_pressedArrow >= 0 ? -1 : ButtonAt(hwnd, x, y);
+        if (g_ui.picker && g_pressedArrow < 0 && g_pressed != BTN_CORNER) SetPicker(hwnd, false);   // un clic altrove chiude la scelta dell'angolo
+        if (g_pressed >= 0 || g_pressedArrow >= 0) SetCapture(hwnd);
+        return 0; }
     case WM_LBUTTONUP: {
-        int k = ButtonAt(hwnd, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)), was = g_pressed;
-        g_pressed = -1; if (GetCapture() == hwnd) ReleaseCapture();
-        if (k >= 0 && k == was) Button(hwnd, k);
+        int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp), k = ButtonAt(hwnd, x, y), arrow = ArrowAt(hwnd, x, y), was = g_pressed, wasArrow = g_pressedArrow;
+        g_pressed = g_pressedArrow = -1; if (GetCapture() == hwnd) ReleaseCapture();
+        if (wasArrow >= 0) { if (arrow == wasArrow) { SetPicker(hwnd, false); MoveToCorner(hwnd, (arrow & 1) != 0, arrow >= 2); } }
+        else if (k >= 0 && k == was) Button(hwnd, k);
         return 0; }
     case WM_TRAY:                                                                   // NOTIFYICON_VERSION_4: l'evento è nella parola bassa, il punto in wParam
         switch (LOWORD(lp)) {
@@ -517,6 +552,51 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_DESTROY: TrayRemove(hwnd); SettingsSave(); SlowStop(); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// ---- quanto costa un fotogramma: gli stessi dati a ogni corsa (grafici mossi, tre programmi a colori, elenchi pieni), n disegni di
+// fila, e il tempo di CPU di tutto il processo, che comprende i thread con cui Direct2D disegna via software ----
+static ULONGLONG ProcessCpu100ns()
+{
+    FILETIME c, e, k, u; GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u);
+    return (((ULONGLONG)k.dwHighDateTime << 32) | k.dwLowDateTime) + (((ULONGLONG)u.dwHighDateTime << 32) | u.dwLowDateTime);
+}
+static void BenchFill(State& s)
+{
+    unsigned seed = 0x9E3779B9u;
+    auto rnd = [&]() { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; return (seed >> 8) * (1.0f / 16777216.0f); };
+    float cpu = 20, ram = 30, gpu = 10;
+    for (int i = 0; i < HIST; i++) {
+        cpu = Clampf(cpu + (rnd() - .5f) * 18, 3, 90); ram = Clampf(ram + (rnd() - .5f) * 2, 20, 45); gpu = Clampf(gpu + (rnd() - .5f) * 25, 0, 95);
+        s.hCpu[i] = cpu; s.hCt[i] = 50 + cpu * .4f; s.hRam[i] = ram; s.hGpu[i] = gpu; s.hGt[i] = 45 + gpu * .3f;
+        s.hDown[i] = rnd() < .2f ? rnd() * 3e7f : rnd() * 2e5f; s.hUp[i] = rnd() * 4e5f; s.hDr[i] = rnd() < .2f ? rnd() * 2e8f : rnd() * 3e6f; s.hDw[i] = rnd() * 4e7f;
+    }
+    s.cpu = cpu; s.cpuTemp = 62; s.cpuWatt = 95; s.ramPct = ram; s.gpuOk = true; s.gpu = gpu; s.gpuTemp = 51; s.gpuWatt = 60; s.vramUsed = 4.2f; s.vramTotal = 15.9f;
+    s.down = s.hDown[HIST - 1]; s.up = s.hUp[HIST - 1]; s.dr = s.hDr[HIST - 1]; s.dw = s.hDw[HIST - 1];
+    s.coresInUse = 0;
+    for (int i = 0; i < s.ncore; i++) { s.cores[i] = rnd() * rnd(); s.coresInUse += s.cores[i]; for (int k = 0; k < 3; k++) s.share[i][k] = (i % 5 == k) ? .6f : 0; }
+    static const wchar_t* names[NTOP] = { L"renderer", L"compiler", L"indexer", L"msedgewebview2", L"System", L"explorer" };
+    for (int i = 0; i < NTOP; i++) {
+        Program& a = s.topCpu[i]; lstrcpyW(a.name, names[i]); a.count = i < 2 ? 3 - i : 1 + i * 7; a.cpu = 6.f / (i + 1); a.ramMb = 400; a.slot = i < 3 ? i : -1;
+        Program& b = s.topRam[i]; lstrcpyW(b.name, names[NTOP - 1 - i]); b.count = 1 + i * 9; b.cpu = 1; b.ramMb = 6000.f / (i + 1); b.slot = -2;
+    }
+    s.nTopCpu = s.nTopRam = NTOP;
+    if (!s.ndrive) { s.ndrive = 3; for (int i = 0; i < 3; i++) { s.drives[i].name[0] = (wchar_t)(L'C' + i); s.drives[i].name[1] = L':'; s.drives[i].name[2] = 0; s.drives[i].freeGb = 130.f + 55 * i; s.drives[i].totalGb = 440.f + 270 * (i == 1); } }
+}
+static void Bench(HWND hwnd, int frames)
+{
+    Sleep(2500); MetricsTick(g_state); SlowCopy(g_state); BenchFill(g_state);
+    SetWindowPos(hwnd, nullptr, 0, 0, Px(hwnd, (float)g_set.width), Px(hwnd, PanelHeight(g_state)), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    for (int i = 0; i < 5; i++) DrawPaint(hwnd, g_state, g_ui);                     // i primi fotogrammi scaldano le cache: non contano
+    LARGE_INTEGER f, a, b; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&a);
+    ULONGLONG cpu = ProcessCpu100ns();
+    for (int i = 0; i < frames; i++) {
+        g_state.uptimeSec += 61; g_state.cpu += .1f; g_state.down += 1000;                // qualche testo cambia a ogni fotogramma, come nel pannello vero
+        DrawPaint(hwnd, g_state, g_ui);
+    }
+    cpu = ProcessCpu100ns() - cpu; QueryPerformanceCounter(&b);
+    char line[160]; int wallUs = (int)((b.QuadPart - a.QuadPart) * 1000000 / f.QuadPart / frames), cpuUs = (int)(cpu / 10 / frames);
+    wsprintfA(line, "bench frames=%d width=%d cpu_us_per_frame=%d wall_us_per_frame=%d", frames, g_set.width, cpuUs, wallUs); LogLine(line);
 }
 
 // due letture a un secondo l'una dall'altra: quanto basta perché percentuali e velocità abbiano un valore
@@ -536,7 +616,9 @@ static int Shot(const wchar_t* arg)
     void* bits = nullptr; HDC dc = CreateCompatibleDC(nullptr); HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
     if (!bmp) return 2;
     SelectObject(dc, bmp);
-    bool ok = DrawToDc(dc, w, h, g_state);
+    Ui ui = { -1, true, 0, false, -1 };
+    if (g_demoUi) { ui.hot = BTN_FIT; ui.hotRegion = RG_TOPCPU + 1; ui.picker = true; ui.hotArrow = 1; }
+    bool ok = DrawToDc(dc, w, h, g_state, ui);
     GdiFlush();
     if (!ok) return 3;
     BITMAPFILEHEADER fh = {}; DWORD size = (DWORD)w * h * 4;
@@ -594,7 +676,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
 {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     g_inst = inst;
-    g_nosave = Find(cmd, L"--nosave") != nullptr; g_noact = Find(cmd, L"--noactivate") != nullptr;
+    g_nosave = Find(cmd, L"--nosave") != nullptr; g_noact = Find(cmd, L"--noactivate") != nullptr; g_demoUi = Find(cmd, L"--demo-ui") != nullptr;
     bool tool = Find(cmd, L"--shot") || Find(cmd, L"--dump");
     if (tool) g_nosave = true;
 
@@ -648,6 +730,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
         DrawPaint(hwnd, g_state, g_ui); ValidateRect(hwnd, nullptr);                // il primo fotogramma subito, senza aspettare WM_PAINT
     }
     { char line[96]; wsprintfA(line, "start first_frame_ms=%d pid=%u", MsSinceProcessStart(), GetCurrentProcessId()); LogLine(line); }
+    if (const wchar_t* p = Find(cmd, L"--bench")) { int n = ReadInt(p); Bench(hwnd, n > 0 ? n : 300); DestroyWindow(hwnd); return 0; }
     SetTimer(hwnd, 1, 1000, nullptr);
 
     MSG m;

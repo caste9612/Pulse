@@ -161,7 +161,17 @@ enum { NICONSEG = sizeof(kIconSegs) / sizeof(kIconSegs[0]) };
 enum { PANEL_W = 514, HEADER_H = 32, BTN_W = 28, NBTN = 4 };                         // misure in unità (96 per pollice)
 enum { BTN_FIT, BTN_CORNER, BTN_PIN, BTN_HIDE };                                     // i quattro bottoni della testata, da sinistra
 inline float BtnX(float panelW, int k) { return panelW - 4 - BTN_W * NBTN + k * BTN_W; }
-struct Ui { int hot; bool pinned; };                                                 // hot: il bottone sotto il mouse, -1 nessuno
+// quello che il mouse sta facendo: il bottone della testata sotto il mouse (-1 nessuno), la riga di Top CPU o Top RAM sotto il mouse
+// (il suo RG_, 0 nessuna), la scelta dell'angolo aperta e la sua freccia sotto il mouse (-1 nessuna)
+struct Ui { int hot; bool pinned; int hotRegion; bool picker; int hotArrow; };
+// la scelta dell'angolo: una tessera di due caselle per due sotto il bottone, 0 alto sx, 1 alto dx, 2 basso sx, 3 basso dx
+enum { PICK_CELL = 28, PICK_PAD = 4 };
+inline float PickerX(float panelW)
+{
+    float side = 2 * (PICK_PAD + PICK_CELL), x = BtnX(panelW, BTN_CORNER) + BTN_W / 2 - side / 2;
+    return x + side > panelW - 4 ? panelW - 4 - side : x;
+}
+inline void PickerCell(float panelW, int k, float& x, float& y) { x = PickerX(panelW) + PICK_PAD + (float)((k & 1) * PICK_CELL); y = (float)(HEADER_H + PICK_PAD + (k >> 1) * PICK_CELL); }
 float PanelHeight(const State& s);                                                   // quanto è alto il contenuto
 // le zone del pannello che hanno un tooltip o un menu, nelle stesse unità del disegno
 enum { RG_POWER = 1, RG_CPU_TEMP, RG_CORES, RG_RAM, RG_GPU, RG_BTN = 10, RG_TOPCPU = 100, RG_TOPRAM = 200 };
@@ -172,4 +182,4 @@ bool DrawCreate(HWND hwnd);
 void DrawResize(HWND hwnd);
 void DrawThemeChanged();                                                             // il tema è cambiato: si rifanno letto puntinato e sfumature
 void DrawPaint(HWND hwnd, const State& s, const Ui& ui);
-bool DrawToDc(HDC memdc, int w, int h, const State& s);                              // una resa fuori schermo, senza finestra
+bool DrawToDc(HDC memdc, int w, int h, const State& s, const Ui& ui);                // una resa fuori schermo, senza finestra
