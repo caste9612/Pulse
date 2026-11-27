@@ -7,6 +7,8 @@
 //
 //   --fake          prova: valori finti al posto dei sensori e del campionamento, per controllare il collegamento senza diritti
 //   --seconds <n>   esce da solo dopo n secondi
+//   --follow-panel  esce quando il pannello che ha visto si chiude (per chi lo avvia a mano: da amministratore solo un altro
+//                   processo elevato potrebbe chiuderlo)
 using System;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
@@ -31,7 +33,7 @@ internal static class Program
 
     private static int Main(string[] args)
     {
-        bool fake = args.Contains("--fake");
+        bool fake = args.Contains("--fake"), follow = args.Contains("--follow-panel"), seenPanel = false;
         int seconds = 0;
         int at = Array.IndexOf(args, "--seconds");
         if (at >= 0 && at + 1 < args.Length) int.TryParse(args[at + 1], out seconds);
@@ -69,9 +71,11 @@ internal static class Program
                     {
                         // il pannello è chiuso o fermo: niente sessione del kernel aperta per nessuno
                         sampler?.Dispose(); sampler = null;
+                        if (follow && seenPanel) break;
                         Thread.Sleep(1000);
                         continue;
                     }
+                    seenPanel = true;
 
                     // che cosa chiede il pannello: una lettura vale solo se il suo contatore è pari e non è cambiato nel frattempo
                     int seq = view.ReadInt32(PSeq);
