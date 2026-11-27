@@ -9,10 +9,11 @@
 #include <icmpapi.h>
 #include <winhttp.h>
 #include <powrprof.h>
+#include <perflib.h>
 
 struct SlowData {
     bool gpuOk; float gpu, gpuTemp, gpuWatt, vramUsed, vramTotal, gpuClock, gpuMemClock; wchar_t gpuName[64];
-    float cpuGhz;
+    float cpuGhz; int clockKind;
     wchar_t adapter[16], localIp[48], publicIp[48]; float pingMs;
     Drive drives[MAXDRIVE]; int ndrive;
     Program topCpu[NTOP], topRam[NTOP]; int nTopCpu, nTopRam;
@@ -171,13 +172,89 @@ static void ReadGpu(SlowData& d)
 // ---------------------------------------------------------------------------------------------------------------------------
 struct PowerInfo { ULONG number, maxMhz, currentMhz, mhzLimit, maxIdle, currentIdle; };
 
+// La velocità media della CPU come la mostra Gestione attività: la frequenza nominale per «% Processor Performance» del counterset
+// «Processor Information» del kernel, letto con l'API consumer di PerfLib V2 (advapi32), senza PDH: come CpuSpeed.cs di Pulse 1.3.1.
+// Serve perché CallNtPowerInformation su molti processori dà sempre la frequenza nominale (4,50 GHz fissi sul 7950X di riferimento).
+static const GUID kProcInfo = { 0xb4fc721a, 0x0378, 0x476f, { 0x89, 0xba, 0xa5, 0xa7, 0x9f, 0x81, 0x0b, 0x36 } };
+static struct { HANDLE query; bool tried, primed; ULONGLONG prevPerf, prevBase; } g_speed;
+
+static BYTE* SpeedReg(PerfRegInfoType type, DWORD& size)
+{
+    size = 0; PerfQueryCounterSetRegistrationInfo(nullptr, &kProcInfo, type, 0, nullptr, 0, &size);
+    if (!size) return nullptr;
+    BYTE* b = (BYTE*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
+    if (b && PerfQueryCounterSetRegistrationInfo(nullptr, &kProcInfo, type, 0, b, size, &size) != ERROR_SUCCESS) { HeapFree(GetProcessHeap(), 0, b); b = nullptr; }
+    return b;
+}
+static bool SpeedAdd(HANDLE query, DWORD counter)
+{
+    struct { PERF_COUNTER_IDENTIFIER id; wchar_t name[8]; } c; ZeroMemory(&c, sizeof(c));   // l'identificatore e, subito dopo, il nome dell'istanza
+    c.id.CounterSetGuid = kProcInfo; c.id.Size = sizeof(c); c.id.CounterId = counter; c.id.InstanceId = 0xFFFFFFFF; lstrcpyW(c.name, L"_Total");
+    return PerfAddCounters(query, &c.id, sizeof(c)) == ERROR_SUCCESS && c.id.Status == ERROR_SUCCESS;
+}
+static bool SpeedOpen()
+{
+    DWORD nameSize = 0, infoSize = 0;
+    BYTE* names = SpeedReg(PERF_REG_COUNTER_ENGLISH_NAMES, nameSize); BYTE* info = SpeedReg(PERF_REG_COUNTERSET_STRUCT, infoSize);
+    DWORD perf = ~0u, perfBase = ~0u, freq = ~0u;
+    if (names && info && nameSize >= sizeof(PERF_STRING_BUFFER_HEADER) && infoSize >= sizeof(PERF_COUNTERSET_REG_INFO)) {
+        const PERF_STRING_BUFFER_HEADER* sh = (const PERF_STRING_BUFFER_HEADER*)names;
+        const PERF_STRING_COUNTER_HEADER* sc = (const PERF_STRING_COUNTER_HEADER*)(sh + 1);
+        const PERF_COUNTERSET_REG_INFO* ci = (const PERF_COUNTERSET_REG_INFO*)info;
+        const PERF_COUNTER_REG_INFO* cr = (const PERF_COUNTER_REG_INFO*)(ci + 1);
+        for (DWORD i = 0; i < ci->NumCounters && (BYTE*)(cr + i + 1) <= info + infoSize; i++)
+            for (DWORD k = 0; k < sh->dwCounters && (BYTE*)(sc + k + 1) <= names + nameSize; k++) {
+                if (sc[k].dwCounterId != cr[i].CounterId || !sc[k].dwOffset || sc[k].dwOffset >= nameSize) continue;
+                const wchar_t* name = (const wchar_t*)(names + sc[k].dwOffset);            // i contatori si cercano per nome inglese, non per numero
+                if (!lstrcmpW(name, L"% Processor Performance")) { perf = cr[i].CounterId; perfBase = cr[i].BaseCounterId; }
+                else if (!lstrcmpW(name, L"Processor Frequency")) freq = cr[i].CounterId;
+            }
+    }
+    if (names) HeapFree(GetProcessHeap(), 0, names); if (info) HeapFree(GetProcessHeap(), 0, info);
+    if (perf == ~0u || perfBase == ~0u || freq == ~0u) return false;
+    if (PerfOpenQueryHandle(nullptr, &g_speed.query) != ERROR_SUCCESS) { g_speed.query = nullptr; return false; }
+    // nell'ordine in cui tornano i dati: il contatore, la sua base, la frequenza nominale
+    if (SpeedAdd(g_speed.query, perf) && SpeedAdd(g_speed.query, perfBase) && SpeedAdd(g_speed.query, freq)) return true;
+    PerfCloseQueryHandle(g_speed.query); g_speed.query = nullptr; return false;
+}
+// MHz dall'ultima lettura; 0 alla prima o se i contatori non rispondono
+static float SpeedRead()
+{
+    if (!g_speed.tried) { g_speed.tried = true; if (!SpeedOpen()) LogLine("cpu speed: PerfLib counters not available, using the clock Windows reports"); }
+    if (!g_speed.query) return 0;
+    static BYTE data[512]; DWORD used = 0;
+    if (PerfQueryCounterData(g_speed.query, (PERF_DATA_HEADER*)data, sizeof(data), &used) != ERROR_SUCCESS) return 0;
+    const PERF_DATA_HEADER* h = (const PERF_DATA_HEADER*)data;
+    if (h->dwNumCounters != 3) return 0;
+    ULONGLONG v[3]; bool wide[3]; DWORD at = sizeof(PERF_DATA_HEADER);
+    for (int i = 0; i < 3; i++) {
+        if (at + sizeof(PERF_COUNTER_HEADER) + sizeof(PERF_COUNTER_DATA) + 4 > sizeof(data)) return 0;
+        const PERF_COUNTER_HEADER* ch = (const PERF_COUNTER_HEADER*)(data + at);
+        if (ch->dwStatus != ERROR_SUCCESS || ch->dwType != PERF_SINGLE_COUNTER) return 0;   // un valore solo, quello dell'istanza _Total
+        const PERF_COUNTER_DATA* cd = (const PERF_COUNTER_DATA*)(ch + 1);
+        wide[i] = cd->dwDataSize >= 8;
+        v[i] = wide[i] ? *(const ULONGLONG*)(cd + 1) : *(const DWORD*)(cd + 1);
+        at += ch->dwSize;
+    }
+    // un contatore a 32 bit che ha fatto il giro riparte da zero: la differenza si prende modulo 2^32
+    ULONGLONG perf = wide[0] ? v[0] - g_speed.prevPerf : (DWORD)(v[0] - g_speed.prevPerf), base = wide[1] ? v[1] - g_speed.prevBase : (DWORD)(v[1] - g_speed.prevBase);
+    bool primed = g_speed.primed; g_speed.prevPerf = v[0]; g_speed.prevBase = v[1]; g_speed.primed = true;
+    if (!primed || !base || !v[2]) return 0;
+    return (float)((double)v[2] * ((double)perf / (double)base) / 100);
+}
+
 static void ReadClock(SlowData& d)
 {
+    static int misses;
+    float mhz = SpeedRead();
+    if (mhz > 100 && mhz < 20000) { d.cpuGhz = mhz / 1000; d.clockKind = 2; misses = 0; return; }
+    // la prima lettura dà solo il punto di partenza, e una lettura mancata ogni tanto non fa cambiare fonte
+    if (g_speed.query && ++misses < 4) return;
     static PowerInfo info[MAXCORE];
     SYSTEM_INFO si; GetSystemInfo(&si); ULONG n = si.dwNumberOfProcessors; if (n > MAXCORE) n = MAXCORE;
     if (CallNtPowerInformation(ProcessorInformation, nullptr, 0, info, n * sizeof(PowerInfo)) != 0) return;
     ULONG best = 0; for (ULONG i = 0; i < n; i++) if (info[i].currentMhz > best) best = info[i].currentMhz;
-    d.cpuGhz = best / 1000.f;
+    d.cpuGhz = best / 1000.f; d.clockKind = 1;
 }
 
 static void ReadDrives(SlowData& d)
@@ -253,18 +330,28 @@ static void ReadPublicIp(SlowData& d)
 static SlowData g_work;                  // quello che il thread sta riempiendo
 static void Publish() { EnterCriticalSection(&g_lock); g_data = g_work; LeaveCriticalSection(&g_lock); }
 
+// la scheda e l'indirizzo cambiano di rado: si rileggono quando Windows avvisa di un cambio, e comunque una volta al minuto
+static volatile LONG g_adapterDirty = 1;
+static void CALLBACK OnAddressChange(void*, MIB_IPINTERFACE_ROW*, MIB_NOTIFICATION_TYPE) { InterlockedExchange(&g_adapterDirty, 1); }
+
 static DWORD WINAPI SlowThread(void*)
 {
     bool noPublicIp = GetEnvironmentVariableW(L"PULSE_NO_PUBLIC_IP", nullptr, 0) != 0;
+    HANDLE notify = nullptr; NotifyIpInterfaceChange(AF_UNSPEC, OnAddressChange, nullptr, FALSE, &notify);
     for (unsigned tick = 0;; tick++) {                                                   // un giro ogni secondo
         // la prima scansione dà solo il punto di partenza: la seconda arriva dopo un secondo, non dopo cinque
         if (tick % 5 == 0 || tick == 1) { ReadPrograms(g_work); Publish(); }
-        if (tick % 2 == 0) { ReadGpu(g_work); ReadClock(g_work); ReadAdapter(g_work); Publish(); ReadPing(g_work); Publish(); }
+        if (tick % 2 == 0) {
+            ReadGpu(g_work); ReadClock(g_work);
+            if (tick % 60 == 0 || InterlockedExchange(&g_adapterDirty, 0)) ReadAdapter(g_work);
+            Publish(); ReadPing(g_work); Publish();
+        }
         if (tick % 30 == 0) { ReadDrives(g_work); Publish(); }
         // ogni dieci minuti; finché non c'è, un tentativo al minuto
         if (!noPublicIp && (tick % 600 == 3 || (!g_work.publicIp[0] && tick % 60 == 3))) { ReadPublicIp(g_work); Publish(); }
         if (WaitForSingleObject(g_stop, 1000) != WAIT_TIMEOUT) break;
     }
+    if (notify) CancelMibChangeNotify2(notify);
     return 0;
 }
 
@@ -291,7 +378,7 @@ void SlowCopy(State& s)
     const SlowData& d = g_data;
     s.gpuOk = d.gpuOk; s.gpu = d.gpu; s.gpuTemp = d.gpuTemp; s.gpuWatt = d.gpuWatt; s.vramUsed = d.vramUsed; s.vramTotal = d.vramTotal;
     s.gpuClock = d.gpuClock; s.gpuMemClock = d.gpuMemClock; lstrcpynW(s.gpuName, d.gpuName, 64);
-    s.cpuGhz = d.cpuGhz; s.pingMs = d.pingMs;
+    s.cpuGhz = d.cpuGhz; s.clockKind = d.clockKind; s.pingMs = d.pingMs;
     lstrcpynW(s.adapter, d.adapter, 16); lstrcpynW(s.localIp, d.localIp, 48); lstrcpynW(s.publicIp, d.publicIp, 48);
     CopyMemory(s.drives, d.drives, sizeof(d.drives)); s.ndrive = d.ndrive;
     CopyMemory(s.topCpu, d.topCpu, sizeof(d.topCpu)); s.nTopCpu = d.nTopCpu; CopyMemory(s.topRam, d.topRam, sizeof(d.topRam)); s.nTopRam = d.nTopRam;

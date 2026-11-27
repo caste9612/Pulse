@@ -74,6 +74,7 @@ static void ReadTopology(State& s)
 
 // ---- memoria: totale e disponibile, e le liste delle pagine per la barra (in uso, modificata, in cache, libera) ----
 struct MemList { SIZE_T zero, free, modified, modifiedNoWrite, bad, byPriority[8], repurposed[8], modifiedPageFile; };
+struct PageFile { ULONG next, total, inUse, peak; UNICODE_STRING name; };               // in pagine (classe 18)
 
 static void ReadRam(State& s)
 {
@@ -90,6 +91,18 @@ static void ReadRam(State& s)
         s.ramInUse = s.ramTotal - s.ramFree - s.ramModified - s.ramStandby; if (s.ramInUse < 0) s.ramInUse = 0;
         s.ramParts = true;
     } else s.ramParts = false;                                                       // senza le liste: la barra mostra usata e disponibile
+    // per il tooltip: quanta memoria i programmi hanno chiesto contro il limite (RAM più file di paging), e il file di paging vero
+    s.commitLimit = m.ullTotalPageFile / GB; s.commit = (m.ullTotalPageFile - m.ullAvailPageFile) / GB;
+    static BYTE pf[4096]; s.pageTotal = s.pageUsed = 0;
+    if (NtQuerySystemInformation((SYSTEM_INFORMATION_CLASS)18, pf, sizeof(pf), &len) >= 0 && len >= sizeof(PageFile)) {
+        SYSTEM_INFO si; GetSystemInfo(&si); float page = si.dwPageSize / GB;
+        for (ULONG off = 0; off + sizeof(PageFile) <= len;) {
+            const PageFile* e = (const PageFile*)(pf + off);
+            s.pageTotal += e->total * page; s.pageUsed += e->inUse * page;
+            if (!e->next) break;
+            off += e->next;
+        }
+    }
 }
 
 // ---- disco: i byte letti e scritti da tutto il sistema (NtQuerySystemInformation, classe 2) ----

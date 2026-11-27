@@ -11,6 +11,8 @@
 #include <windowsx.h>
 #include <shellapi.h>
 #include <dwmapi.h>
+#include <commctrl.h>
+#include <tlhelp32.h>
 
 FontData g_fontData[NFILE];
 static State g_state;
@@ -23,7 +25,12 @@ static int g_pressed = -1; static bool g_tracking;
 static float g_minW = 420; static int g_minDrives = -1;
 static UINT g_msgTaskbar, g_msgShow;
 enum { WM_TRAY = WM_APP + 1 };
-enum { ID_SHOW = 1, ID_DARK, ID_LIGHT, ID_FOLLOW, ID_TOPMOST, ID_AUTOSTART, ID_EXIT, ID_CORNER = 10 };   // ID_CORNER + 0..3: alto sx, alto dx, basso sx, basso dx
+enum { ID_SHOW = 1, ID_DARK, ID_LIGHT, ID_FOLLOW, ID_TOPMOST, ID_AUTOSTART, ID_EXIT, ID_CORNER = 10,   // ID_CORNER + 0..3: alto sx, alto dx, basso sx, basso dx
+       ID_P_OPEN = 20, ID_P_PROPS, ID_P_END, ID_P_SEARCH };                           // il menu di un programma di Top CPU o Top RAM
+static HWND g_tip;                                                                    // il controllo dei tooltip
+static Region g_rg[48]; static int g_nrg;                                             // le zone del pannello, rifatte quando cambia la misura
+static wchar_t g_tipText[1100];
+static Program g_menuProg;                                                            // il programma su cui è aperto il menu
 
 // ---- piccoli attrezzi ----
 static const wchar_t* Find(const wchar_t* s, const wchar_t* key)
@@ -198,6 +205,156 @@ static void ShowPanel(HWND hwnd, bool show)
     SettingsSave();
 }
 
+// ---- tooltip: una zona per ogni cosa che ha qualcosa da spiegare; il testo si fa quando serve, coi valori di quel momento ----
+static void TipsLayout(HWND hwnd)
+{
+    if (!g_tip) return;
+    for (int i = 0; i < g_nrg; i++) { TTTOOLINFOW ti = { TTTOOLINFOW_V2_SIZE }; ti.hwnd = hwnd; ti.uId = i + 1; SendMessageW(g_tip, TTM_DELTOOLW, 0, (LPARAM)&ti); }
+    RECT rc; GetClientRect(hwnd, &rc); float sc = Scale(hwnd);
+    g_nrg = PanelRegions(g_state, rc.right / sc, g_rg, 48);
+    for (int i = 0; i < g_nrg; i++) {
+        TTTOOLINFOW ti = { TTTOOLINFOW_V2_SIZE }; ti.uFlags = TTF_SUBCLASS; ti.hwnd = hwnd; ti.uId = i + 1; ti.lpszText = LPSTR_TEXTCALLBACKW;
+        SetRect(&ti.rect, (int)(g_rg[i].x * sc), (int)(g_rg[i].y * sc), (int)((g_rg[i].x + g_rg[i].w) * sc), (int)((g_rg[i].y + g_rg[i].h) * sc));
+        SendMessageW(g_tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+    }
+}
+static void TipsCreate(HWND hwnd)
+{
+    InitCommonControls();
+    g_tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, 0, 0, 0, 0, hwnd, nullptr, g_inst, nullptr);
+    if (!g_tip) return;
+    SendMessageW(g_tip, TTM_SETMAXTIPWIDTH, 0, Px(hwnd, 460)); SendMessageW(g_tip, TTM_SETDELAYTIME, TTDT_AUTOPOP, 30000);
+    TipsLayout(hwnd);
+}
+static int RegionAt(HWND hwnd, int px, int py)
+{
+    float sc = Scale(hwnd), x = px / sc, y = py / sc;
+    for (int i = 0; i < g_nrg; i++) if (x >= g_rg[i].x && x < g_rg[i].x + g_rg[i].w && y >= g_rg[i].y && y < g_rg[i].y + g_rg[i].h) return g_rg[i].id;
+    return 0;
+}
+static const Program* ProgramOf(int region)
+{
+    if (region >= RG_TOPCPU && region < RG_TOPCPU + g_state.nTopCpu) return &g_state.topCpu[region - RG_TOPCPU];
+    if (region >= RG_TOPRAM && region < RG_TOPRAM + g_state.nTopRam) return &g_state.topRam[region - RG_TOPRAM];
+    return nullptr;
+}
+// il testo di una zona; vuoto = nessun tooltip
+static void TipText(int region, Lb& b)
+{
+    const State& s = g_state;
+    static const wchar_t* btn[NBTN] = { L"Fit the size to the content", L"Move to a corner of the screen", L"Always on top (click to toggle)", L"Hide (stays in the tray)" };
+    if (region >= RG_BTN && region < RG_BTN + NBTN) { b.t(btn[region - RG_BTN]); return; }
+    switch (region) {
+    case RG_POWER: b.t(L"Estimated total PC power: CPU + graphics card + about 30 W for the rest"); return;
+    case RG_CPU_TEMP:
+        if (Has(s.cpuTemp)) b.t(L"CPU temperature: also the thin line in the graph, on the same 0 to 100 scale as the load.");
+        else b.t(L"CPU temperature and power are read by Pulse's sensors process, which this build doesn't have yet.");
+        return;
+    case RG_CORES: {
+        int phys = 0; for (int i = 0; i < s.ncore; i++) if (i == 0 || s.phys[i] != s.phys[i - 1]) phys++;
+        b.t(L"Sum of the loads of the ");
+        if (phys < s.ncore) b.t(L"logical cores (").i(s.ncore).t(L", on ").i(phys).t(L" physical cores)"); else b.t(L"cores (").i(s.ncore).c(L')');
+        b.t(L": how many full cores the current work is worth.\nUnder the graph, ");
+        b.t(phys < s.ncore ? L"one bar per logical core, those of the same physical core side by side" : L"one bar per core");
+        b.t(L": many medium bars mean parallel work, a single full one a single thread.");
+        if (s.clockKind == 2) b.t(L"\nClock: the average speed of the cores at work, as in Task Manager.");
+        else if (s.clockKind == 1) b.t(L"\nClock reported by Windows (the base clock on many processors).");
+        return; }
+    case RG_RAM:
+        if (s.ramParts) {
+            b.t(L"In use ").f1(s.ramInUse).t(L" GB: processes, drivers and the system.\nModified ").f1(s.ramModified).t(L" GB: to be written to disk before it can be reused.");
+            b.t(L"\nCached ").f1(s.ramStandby).t(L" GB: data and programs kept ready, given back by Windows as soon as it's needed.\nFree ").f1(s.ramFree).t(L" GB.");
+            b.t(L"\nAvailable ").f1(s.ramAvail).t(L" GB: cached plus free, what programs can still take.");
+        } else b.t(L"Used ").f1(s.ramUsed).t(L" GB, available ").f1(s.ramAvail).t(L" GB.");
+        if (s.commitLimit > 0) b.t(L"\nCommitted ").f1(s.commit).t(L" of ").f1(s.commitLimit).t(L" GB: what programs have asked for, against the limit of RAM plus page file.");
+        if (s.pageTotal > 0) b.t(L"\nPage file: ").f2(s.pageUsed).t(L" GB in use of ").f1(s.pageTotal).t(L" GB."); else b.t(L"\nNo page file.");
+        return;
+    case RG_GPU:
+        if (!s.gpuOk) { b.t(L"No graphics card read: this build reads NVIDIA cards only."); return; }
+        b.t(s.gpuName);
+        if (s.gpuClock > 0) b.t(L"\nCore clock ").r(s.gpuClock).t(L" MHz");
+        if (s.gpuMemClock > 0) b.t(L"\nMemory clock ").r(s.gpuMemClock).t(L" MHz");
+        return;
+    }
+    if (const Program* p = ProgramOf(region)) {
+        if (region < RG_TOPRAM) {
+            b.f2(p->cpu * s.ncore / 100).t(L" cores: how many full cores this program is worth");
+            if (p->count > 1) b.c(L'\n').i(p->count).t(L" processes, added up");
+        } else if (p->count > 1) b.i(p->count).t(L" processes, their memory added up: what they share counts more than once");
+    }
+}
+
+// ---- il menu di un programma: cartella, proprietà, termina, cerca ----
+static bool ProgramPath(DWORD pid, wchar_t* path)
+{
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid); if (!h) return false;
+    DWORD n = MAX_PATH; bool ok = QueryFullProcessImageNameW(h, 0, path, &n) != 0; CloseHandle(h); return ok;
+}
+// il nome come sta negli elenchi: senza .exe, accorciato come lì
+static void ListedName(const wchar_t* exe, wchar_t* name)
+{
+    lstrcpynW(name, exe, PROGNAME); int n = lstrlenW(name);
+    if (n > 4 && !lstrcmpiW(name + n - 4, L".exe")) name[n - 4] = 0;
+}
+static void ProgramMenu(HWND hwnd, const Program& p)
+{
+    g_menuProg = p;
+    HMENU menu = CreatePopupMenu(); Sb end;
+    if (p.count > 1) end.t(L"End all ").i(p.count).t(L" processes"); else end.t(L"End process");
+    AppendMenuW(menu, MF_STRING, ID_P_OPEN, L"Open file location"); AppendMenuW(menu, MF_STRING, ID_P_PROPS, L"Properties");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); AppendMenuW(menu, MF_STRING, ID_P_END, end.s);
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); AppendMenuW(menu, MF_STRING, ID_P_SEARCH, L"Search online");
+    POINT pt; GetCursorPos(&pt);
+    SetForegroundWindow(hwnd); TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr); PostMessageW(hwnd, WM_NULL, 0, 0); DestroyMenu(menu);
+}
+// una riga è un programma: la conferma dice quanti processi chiude. Si chiudono quelli che hanno quel nome adesso; per un
+// programma di un processo solo, quel processo e solo se ha ancora quel nome (il numero può essere passato a un altro)
+static void ProgramEnd(HWND hwnd, const Program& p)
+{
+    Lb q; q.t(L"End ").t(p.name);
+    if (p.count > 1) q.t(L"? All its ").i(p.count).t(L" processes will be closed."); else q.t(L" (PID ").i(p.pid).t(L")?");
+    if (MessageBoxW(hwnd, q.s, L"Confirm", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_TOPMOST) != IDYES) return;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); if (snap == INVALID_HANDLE_VALUE) return;
+    PROCESSENTRY32W e = { sizeof(e) }; int failed = 0, found = 0; DWORD error = 0;
+    for (BOOL ok = Process32FirstW(snap, &e); ok; ok = Process32NextW(snap, &e)) {
+        wchar_t name[PROGNAME]; ListedName(e.szExeFile, name);
+        if (lstrcmpiW(name, p.name) || (p.count == 1 && e.th32ProcessID != p.pid)) continue;
+        found++;
+        HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, e.th32ProcessID);
+        if (!h || !TerminateProcess(h, 1)) { failed++; if (!error) error = GetLastError(); }
+        if (h) CloseHandle(h);
+    }
+    CloseHandle(snap);
+    if (failed) {
+        Lb m; if (found > 1) m.t(L"Couldn't end ").i(failed).t(L" of ").i(found).t(L" processes"); else m.t(L"Couldn't end the process");
+        m.t(error == ERROR_ACCESS_DENIED ? L": access denied." : L".");
+        MessageBoxW(hwnd, m.s, L"Error", MB_OK | MB_ICONERROR | MB_TOPMOST);
+    }
+}
+static void ProgramCommand(HWND hwnd, int id)
+{
+    const Program& p = g_menuProg; wchar_t path[MAX_PATH];
+    if (!p.name[0]) return;
+    if (id == ID_P_END) { ProgramEnd(hwnd, p); return; }
+    if (id == ID_P_SEARCH) {                                                         // il browser predefinito, col nome del processo nella ricerca
+        Lb url; url.t(L"https://www.google.com/search?q=");
+        char utf8[160]; int n = WideCharToMultiByte(CP_UTF8, 0, p.name, -1, utf8, sizeof(utf8), nullptr, nullptr);
+        for (int i = 0; i < n - 1; i++) {
+            unsigned char ch = (unsigned char)utf8[i];
+            if ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '-' || ch == '_' || ch == '.') url.c((wchar_t)ch);
+            else { static const wchar_t hex[] = L"0123456789ABCDEF"; url.c(L'%').c(hex[ch >> 4]).c(hex[ch & 15]); }
+        }
+        url.t(L"%20process%20windows");
+        ShellExecuteW(hwnd, L"open", url.s, nullptr, nullptr, SW_SHOWNORMAL); return;
+    }
+    if (!ProgramPath(p.pid, path)) return;                                           // un processo di sistema che non si lascia aprire: niente
+    if (id == ID_P_OPEN) { Lb arg; arg.t(L"/select,\"").t(path).c(L'"'); ShellExecuteW(hwnd, L"open", L"explorer.exe", arg.s, nullptr, SW_SHOWNORMAL); }
+    else if (id == ID_P_PROPS) {
+        SHELLEXECUTEINFOW info = { sizeof(info) }; info.fMask = SEE_MASK_INVOKEIDLIST; info.hwnd = hwnd; info.lpVerb = L"properties"; info.lpFile = path; info.nShow = SW_SHOW;
+        ShellExecuteExW(&info);
+    }
+}
+
 // ---- tray ----
 static void TrayAdd(HWND hwnd)
 {
@@ -251,6 +408,7 @@ static void Command(HWND hwnd, int id)
     case ID_TOPMOST: SetTopmost(hwnd, !g_set.topmost); break;
     case ID_AUTOSTART: SetAutostart(!Autostart()); break;
     case ID_EXIT: DestroyWindow(hwnd); break;
+    case ID_P_OPEN: case ID_P_PROPS: case ID_P_END: case ID_P_SEARCH: ProgramCommand(hwnd, id); break;
     default: if (id >= ID_CORNER && id < ID_CORNER + 4) MoveToCorner(hwnd, (id - ID_CORNER) & 1, (id - ID_CORNER) >= 2);
     }
 }
@@ -297,13 +455,25 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         m->ptMinTrackSize.x = Px(hwnd, MinWidth()); m->ptMaxTrackSize.x = Px(hwnd, 1600); m->ptMinTrackSize.y = m->ptMaxTrackSize.y = h;
         return 0; }
     case WM_ERASEBKGND: return 1;
-    case WM_TIMER:
+    case WM_TIMER: {
         MetricsTick(g_state); SlowCopy(g_state); FitHeight(hwnd);
+        static ULONGLONG minute; if (g_state.uptimeSec / 60 != minute) { minute = g_state.uptimeSec / 60; TipsLayout(hwnd); }   // la riga della testata si allunga coi minuti
         if (IsWindowVisible(hwnd)) InvalidateRect(hwnd, nullptr, FALSE);            // nascosto nel tray legge, così il minuto è pronto quando torna, ma non disegna
         if (g_seconds && ++g_ticks >= (unsigned)g_seconds) DestroyWindow(hwnd);
-        return 0;
+        return 0; }
     case WM_SIZE:
-        if (wp != SIZE_MINIMIZED && LOWORD(lp)) { g_set.width = (int)(LOWORD(lp) / Scale(hwnd) + .5f); DrawResize(hwnd); InvalidateRect(hwnd, nullptr, FALSE); }
+        if (wp != SIZE_MINIMIZED && LOWORD(lp)) { g_set.width = (int)(LOWORD(lp) / Scale(hwnd) + .5f); DrawResize(hwnd); TipsLayout(hwnd); InvalidateRect(hwnd, nullptr, FALSE); }
+        return 0;
+    case WM_NOTIFY: {
+        NMHDR* nh = (NMHDR*)lp;
+        if (nh->hwndFrom == g_tip && nh->code == TTN_GETDISPINFOW) {
+            NMTTDISPINFOW* di = (NMTTDISPINFOW*)lp; int i = (int)di->hdr.idFrom - 1; Lb b;
+            if (i >= 0 && i < g_nrg) TipText(g_rg[i].id, b);
+            lstrcpynW(g_tipText, b.s, 1100); di->lpszText = g_tipText;
+        }
+        return 0; }
+    case WM_RBUTTONUP:                                                              // tasto destro su una riga di Top CPU o Top RAM
+        if (const Program* p = ProgramOf(RegionAt(hwnd, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)))) ProgramMenu(hwnd, *p);
         return 0;
     case WM_EXITSIZEMOVE: SettingsSave(); return 0;
     case WM_DPICHANGED: {
@@ -367,9 +537,9 @@ static int Shot(const wchar_t* arg)
     CloseHandle(f); return 0;
 }
 
-static void DumpLine(HANDLE f, const Sb& b)
+template <int N> static void DumpLine(HANDLE f, const SbT<N>& b)
 {
-    char utf8[400]; int n = WideCharToMultiByte(CP_UTF8, 0, b.s, b.n, utf8, sizeof(utf8) - 2, nullptr, nullptr);
+    char utf8[3400]; int n = WideCharToMultiByte(CP_UTF8, 0, b.s, b.n, utf8, sizeof(utf8) - 2, nullptr, nullptr);
     utf8[n++] = '\r'; utf8[n++] = '\n'; DWORD w; WriteFile(f, utf8, n, &w, nullptr);
 }
 static int Dump(const wchar_t* arg)
@@ -398,6 +568,15 @@ static int Dump(const wchar_t* arg)
     for (int i = 0; i < s.ndrive; i++) DumpLine(f, b.clear().t(L"drive ").t(s.drives[i].name).t(L" free_gb ").f2(s.drives[i].freeGb).t(L" total_gb ").f2(s.drives[i].totalGb));
     for (int i = 0; i < s.nTopCpu; i++) DumpLine(f, b.clear().t(L"top_cpu ").t(s.topCpu[i].name).t(L" x").i(s.topCpu[i].count).t(L" cpu ").f2(s.topCpu[i].cpu).t(L" pid ").i(s.topCpu[i].pid));
     for (int i = 0; i < s.nTopRam; i++) DumpLine(f, b.clear().t(L"top_ram ").t(s.topRam[i].name).t(L" x").i(s.topRam[i].count).t(L" mb ").r(s.topRam[i].ramMb).t(L" pid ").i(s.topRam[i].pid));
+    DumpLine(f, b.clear().t(L"clock_kind ").i(s.clockKind).t(L" commit_gb ").f2(s.commit).t(L" of ").f2(s.commitLimit).t(L" pagefile_gb ").f2(s.pageUsed).t(L" of ").f2(s.pageTotal));
+    // le zone e i loro tooltip, una riga l'una (gli a capo diventano barre)
+    g_nrg = PanelRegions(s, (float)g_set.width, g_rg, 48);
+    for (int i = 0; i < g_nrg; i++) {
+        Lb t, line; TipText(g_rg[i].id, t);
+        for (int k = 0; k < t.n; k++) if (t.s[k] == L'\n') t.s[k] = L'|';
+        line.t(L"tip ").i(g_rg[i].id).t(L" at ").r(g_rg[i].x).c(L',').r(g_rg[i].y).t(L" size ").r(g_rg[i].w).c(L'x').r(g_rg[i].h).t(L": ").t(t.s);
+        DumpLine(f, line);
+    }
     CloseHandle(f); return 0;
 }
 
@@ -453,7 +632,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
     if (!DrawCreate(hwnd)) { LogLine("drawing start FAILED"); return 4; }
 
     g_msgTaskbar = RegisterWindowMessageW(L"TaskbarCreated");
-    TrayAdd(hwnd);
+    TrayAdd(hwnd); TipsCreate(hwnd);
     if (g_set.visible) {
         ShowWindow(hwnd, g_noact ? SW_SHOWNOACTIVATE : SW_SHOW);
         DrawPaint(hwnd, g_state, g_ui); ValidateRect(hwnd, nullptr);                // il primo fotogramma subito, senza aspettare WM_PAINT

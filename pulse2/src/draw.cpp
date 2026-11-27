@@ -329,6 +329,24 @@ float PanelFitWidth(const State& s)
     return ceilf(w);
 }
 
+// le zone con un tooltip o un menu: le stesse misure di DrawPanel
+int PanelRegions(const State& s, float W, Region* out, int cap)
+{
+    if (!InitFactories()) return 0;
+    const float X = 12, GX = 192, GW = W - GX - 14, RW = W - 2 * X; int n = 0;
+    auto add = [&](int id, float x, float y, float w, float h) { if (n < cap && w > 0 && h > 0) { out[n].id = id; out[n].x = x; out[n].y = y; out[n].w = w; out[n].h = h; n++; } };
+    for (int k = 0; k < NBTN; k++) add(RG_BTN + k, BtnX(W, k), 2, BTN_W, HEADER_H - 4);
+    { Sb b; Uptime(b, s.uptimeSec); float px = 36 + TextW(F_NAME, L"PULSE") + 14 + TextW(F_TEXT, b.s) + 14; add(RG_POWER, px, 6, TextW(F_TEXT, L"PC ~999 W"), 20); }
+    float y = 36;
+    add(RG_CPU_TEMP, 124, y, 60, 32); add(RG_CORES, X, y + 34, 180, 20); add(RG_CORES, GX, y + 34, GW, 16); y += 63;
+    add(RG_RAM, X, y + 34, 180, 20); add(RG_RAM, GX, y + 34, GW, 16); y += 63;
+    add(RG_GPU, 8, y, 176, 54); add(RG_GPU, GX, y + 34, GW, 16); y += 63 + 65 + 56;
+    y += (float)s.ndrive * 17 + 12;
+    const float tw = floorf((RW - 12) / 2);
+    for (int i = 0; i < NTOP; i++) { add(RG_TOPCPU + i, X + 1, y + 12 + i * 17, tw - 2, 17); add(RG_TOPRAM + i, X + RW - tw + 1, y + 12 + i * 17, tw - 2, 17); }
+    return n;
+}
+
 static void DrawPanel(const State& s, const Ui& ui, float W, float H)
 {
     const float X = 12, GX = 192, GW = W - GX - 14, RW = W - 2 * X, LH = 32;

@@ -32,10 +32,12 @@ struct State {
     int ncore; float cores[MAXCORE]; unsigned char phys[MAXCORE];   // carico 0..1 di ogni core logico e il core fisico di cui fa parte
     float cpu, coresInUse;              // percento e somma dei carichi
     float cpuGhz;                       // 0 = non si sa
+    int clockKind;                      // 1 = quella che dice Windows (su molti processori la nominale), 2 = la media dei core al lavoro
     float cpuTemp, cpuWatt;             // NONE finché non c'è il processo dei sensori
     // RAM, in GB
     float ramPct, ramUsed, ramTotal, ramAvail;
     bool ramParts; float ramInUse, ramModified, ramStandby, ramFree;
+    float commit, commitLimit, pageUsed, pageTotal;                   // memoria impegnata e file di paging, per il tooltip
     // GPU
     bool gpuOk; float gpu, gpuTemp, gpuWatt, vramUsed, vramTotal, gpuClock, gpuMemClock; wchar_t gpuName[64];
     // rete e disco, in byte al secondo
@@ -62,30 +64,32 @@ void SlowOnce();                        // un giro completo, subito (per --shot 
 void LogLine(const char* s);            // %TEMP%\pulse2.log
 
 // ---- testi: un piccolo costruttore di stringhe, senza printf ----
-struct Sb {
-    wchar_t s[128]; int n;
-    Sb() : n(0) { s[0] = 0; }
-    Sb& clear() { n = 0; s[0] = 0; return *this; }
-    Sb& c(wchar_t ch) { if (n < 127) { s[n++] = ch; s[n] = 0; } return *this; }
-    Sb& t(const wchar_t* p) { while (*p) c(*p++); return *this; }
-    Sb& i(long long v) {
+template <int N> struct SbT {
+    wchar_t s[N]; int n;
+    SbT() : n(0) { s[0] = 0; }
+    SbT& clear() { n = 0; s[0] = 0; return *this; }
+    SbT& c(wchar_t ch) { if (n < N - 1) { s[n++] = ch; s[n] = 0; } return *this; }
+    SbT& t(const wchar_t* p) { while (*p) c(*p++); return *this; }
+    SbT& i(long long v) {
         if (v < 0) { c(L'-'); v = -v; }
         wchar_t b[24]; int k = 0; do { b[k++] = (wchar_t)(L'0' + v % 10); v /= 10; } while (v);
         while (k) c(b[--k]); return *this;
     }
-    Sb& r(float v) { return i((long long)(v + .5f)); }                                    // arrotondato all'intero
-    Sb& f1(float v) { long long x = (long long)(v * 10 + .5f); i(x / 10); c(L'.'); c((wchar_t)(L'0' + x % 10)); return *this; }
-    Sb& f2(float v) { long long x = (long long)(v * 100 + .5f); i(x / 100); c(L'.'); c((wchar_t)(L'0' + x / 10 % 10)); c((wchar_t)(L'0' + x % 10)); return *this; }
-    Sb& sep() { if (n) t(L" \x00B7 "); return *this; }                                    // il punto a mezza altezza tra due parti di una riga
+    SbT& r(float v) { return i((long long)(v + .5f)); }                                    // arrotondato all'intero
+    SbT& f1(float v) { long long x = (long long)(v * 10 + .5f); i(x / 10); c(L'.'); c((wchar_t)(L'0' + x % 10)); return *this; }
+    SbT& f2(float v) { long long x = (long long)(v * 100 + .5f); i(x / 100); c(L'.'); c((wchar_t)(L'0' + x / 10 % 10)); c((wchar_t)(L'0' + x % 10)); return *this; }
+    SbT& sep() { if (n) t(L" \x00B7 "); return *this; }                                    // il punto a mezza altezza tra due parti di una riga
     // gli stessi formati di Pulse 1.x
-    Sb& rate(float b) {
+    SbT& rate(float b) {
         if (b >= 1073741824.f) { f2(b / 1073741824.f); t(L" GB/s"); } else if (b >= 1048576.f) { f1(b / 1048576.f); t(L" MB/s"); }
         else if (b >= 1024) { r(b / 1024); t(L" KB/s"); } else { r(b); t(L" B/s"); }
         return *this;
     }
-    Sb& ram(float mb) { if (mb >= 1024) { f2(mb / 1024); t(L" GB"); } else { r(mb); t(L" MB"); } return *this; }
-    Sb& gb(float g) { if (g >= 1000) { f1(g / 1024); t(L" TB"); } else if (g >= 100) { r(g); t(L" GB"); } else { f1(g); t(L" GB"); } return *this; }
+    SbT& ram(float mb) { if (mb >= 1024) { f2(mb / 1024); t(L" GB"); } else { r(mb); t(L" MB"); } return *this; }
+    SbT& gb(float g) { if (g >= 1000) { f1(g / 1024); t(L" TB"); } else if (g >= 100) { r(g); t(L" GB"); } else { f1(g); t(L" GB"); } return *this; }
 };
+typedef SbT<128> Sb;                    // una riga del pannello
+typedef SbT<1100> Lb;                   // un tooltip di più righe
 
 // scala tonda per i grafici di rete e disco, a passi 1-2-5 da 100 KB/s a 10 GB/s: la più piccola che contiene il massimo del minuto
 struct Nice { float max; wchar_t label[16]; };
@@ -153,6 +157,10 @@ enum { BTN_FIT, BTN_CORNER, BTN_PIN, BTN_HIDE };                                
 inline float BtnX(float panelW, int k) { return panelW - 4 - BTN_W * NBTN + k * BTN_W; }
 struct Ui { int hot; bool pinned; };                                                 // hot: il bottone sotto il mouse, -1 nessuno
 float PanelHeight(const State& s);                                                   // quanto è alto il contenuto
+// le zone del pannello che hanno un tooltip o un menu, nelle stesse unità del disegno
+enum { RG_POWER = 1, RG_CPU_TEMP, RG_CORES, RG_RAM, RG_GPU, RG_BTN = 10, RG_TOPCPU = 100, RG_TOPRAM = 200 };
+struct Region { int id; float x, y, w, h; };
+int PanelRegions(const State& s, float W, Region* out, int cap);
 float PanelFitWidth(const State& s);                                                 // la larghezza più stretta in cui niente è tagliato
 bool DrawCreate(HWND hwnd);
 void DrawResize(HWND hwnd);
