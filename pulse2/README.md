@@ -40,13 +40,20 @@ process, or with one that is not elevated, the panel works as before: the temper
 have one colour; the tooltip says what is missing. When the panel is closed or silent for five seconds the sensors
 process reads nothing and keeps no kernel session open.
 
-Checked so far without rights only: with `--fake` (made-up values, to test the link: temperature and its line in the
-graph, power, clock, coloured core bars and the squares next to the programs) and with the real process not elevated
-(everything stays `n/a`, no errors). **The elevated run has not been done yet.**
+Checked on the reference PC on 27/11/2026, next to the installed Pulse:
+
+- without rights: with `--fake` (made-up values, to test the link) and with the real process not elevated, where
+  everything stays `n/a` with no errors;
+- **as administrator**, with the panel not elevated: CPU temperature (60°C, with its line in the graph), package power
+  (112 W) and the fastest core's clock (5.33 GHz) reached the panel, and the core bars took the colours of three
+  programs above half a core, one of three processes and one of two, each process tied to its own core: three, two
+  and one coloured bars, counted on the capture. The kernel session opened with them and closed by itself twelve
+  seconds after they stopped, the system's profiling interval went back to 1 ms, and the installed Pulse kept its own
+  session. The sensors process had 10 MB of private memory and used 0.23 s of CPU in 45 s.
 
 ## What is missing
 
-- The elevated check of the sensors process, and the Scheduled Task that starts it at logon.
+- The Scheduled Task that starts the sensors process elevated at logon: for now it is started by hand.
 - GPUs other than NVIDIA, the Wi-Fi name and signal, the SSD temperature.
 - The watch on display driver changes. A crashing NVML call is caught (`__try`) and turns the GPU readings off until
   the next start, instead of taking the process down.
