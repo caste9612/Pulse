@@ -18,9 +18,13 @@ programs instead of processes) with Direct2D rendered by the CPU, on an opaque b
     ping, adapter and local address (when Windows reports a change and once a minute), drives every 30 s, the public
     address every ten minutes.
 - **The window**: no frame, dragged by its header, resized from its left and right edges; its height is always the
-  content's. Header buttons: fit, corner, always on top, hide. Light and dark theme, or the one Windows uses.
-- **Tray icon** with its menu (show or hide, theme, always on top, start with Windows, exit), **settings** in
-  `%APPDATA%\Pulse2\settings.txt`, a **single instance**.
+  content's. Dragged near an edge of the screen's work area it stops 12 units from it. Header buttons: fit, corner
+  (four arrows open under it, one per corner of the screen), always on top, hide. Light and dark theme, or the one
+  Windows uses; menus and tooltips follow it.
+- **Tray icon** with its menu (show or hide, theme, always on top, start with Windows, exit) and the three loads in
+  its tooltip, **settings** in `%APPDATA%\Pulse2\settings.txt`, a **single instance**.
+- **Drawing only when someone can see it**: hidden in the tray, with the session locked or the display off, Pulse 2
+  keeps reading, so the last minute is there when it comes back, but draws nothing.
 - **Tooltips** for the cores, the memory, the GPU, the power estimate, the header buttons and each program row, and the
   **menu of a program** (open file location, properties, end, search online). *End* closes every process of the
   program, after a confirmation that says how many.
@@ -57,8 +61,8 @@ Checked on the reference PC on 27/11/2026, next to the installed Pulse:
 - GPUs other than NVIDIA, the Wi-Fi name and signal, the SSD temperature.
 - The watch on display driver changes. A crashing NVML call is caught (`__try`) and turns the GPU readings off until
   the next start, instead of taking the process down.
-- The accent, transparency and density of Pulse 1.x's *Appearance* window; menus and tooltips are the system's own, not
-  drawn in the panel's style; the corner button opens a menu, not the four arrows.
+- The accent, transparency and density of Pulse 1.x's *Appearance* window. Menus and tooltips are the system's own,
+  dark or light with the theme, not drawn in the panel's style.
 - Vertical scrolling: the window is as high as its content, so on a short screen the bottom is cut.
 - An installer, and the passage of the settings from Pulse 1.x.
 
@@ -72,7 +76,8 @@ Checked on the reference PC on 27/11/2026, next to the installed Pulse:
 | `--theme dark\|light` | theme, instead of the saved one |
 | `--nosave` | a test copy: reads and writes no settings, no single instance |
 | `--noactivate`, `--seconds <n>` | don't take the focus; close after n seconds |
-| `--shot <file.bmp>` | read for a second, render one frame off screen, save it and exit |
+| `--shot <file.bmp>` | read for a second, render one frame off screen, save it and exit; `--demo-ui` adds a hovered row and the open corner arrows, `--dpi <n>` another scale (144 is 150%) |
+| `--bench <n>` | draw n frames in a row with the same made-up data and log the CPU each one cost |
 | `--dump <file.txt>` | read for a second and write the readings, the regions and their tooltips as text |
 
 The sensors process builds with `dotnet build sensors` and takes `--fake` (made-up values instead of sensors and
@@ -83,6 +88,13 @@ library. The log is `%TEMP%\pulse2.log`.
 
 ## First figures
 
-A look, not a measurement (one run of 70 s on the reference PC, 27/11/2026, next to the installed Pulse): first frame
-after about 50 ms, 37 MB of private memory, about 1% of one core in its first minute. Pulse 1.4.0 measured 132 MB and
-1.65%. About 21 of the 37 MB arrive with the NVIDIA library: with `PULSE_NO_NVML=1` the same build had 16.6 MB.
+Looks, not measurements: single runs on the reference PC next to the installed Pulse, on 27 and 28/11/2026, with the PC
+in use.
+
+- First frame after about 50 ms.
+- **CPU**: hidden in the tray 0.12% of one core, which is the readings alone; visible 0.27%. Before the drawing was
+  reworked it was about 1.2% visible: one frame cost 6.1 ms of CPU and now costs 1.4 (`--bench`). Pulse 1.4.0
+  measured 1.65% visible.
+- **Private memory**: 41 MB, steady over three and a half minutes; 19.5 MB with `PULSE_NO_NVML=1`, so about 21 MB
+  arrive with the NVIDIA library. Pulse 1.4.0 measured 132 MB.
+- The sensors process, elevated: 10 MB and 0.23 s of CPU in 45 s.

@@ -6,7 +6,8 @@
 //   --theme dark|light  tema, al posto di quello salvato    --seconds <n>    si chiude da solo dopo n secondi
 //   --noactivate        non prende il fuoco quando si apre  --nosave         prova: non legge né scrive impostazioni, niente istanza unica
 //   --shot <file.bmp>   legge i dati per un secondo, disegna un fotogramma fuori schermo, lo salva ed esce (nessuna finestra);
-//                       con --demo-ui disegna anche una riga sotto il mouse e la scelta dell'angolo aperta
+//                       con --demo-ui disegna anche una riga sotto il mouse e la scelta dell'angolo aperta, con --dpi <n> a
+//                       un'altra scala (144 = 150 %)
 //   --dump <file.txt>   legge i dati per un secondo e li scrive come testo, per confrontarli con i contatori di Windows
 //   --bench <n>         disegna n fotogrammi di fila con dati finti sempre uguali e scrive nel log quanta CPU è costato ognuno
 #include "app.h"
@@ -16,6 +17,7 @@
 #include <commctrl.h>
 #include <tlhelp32.h>
 #include <uxtheme.h>
+#include <wtsapi32.h>
 #include "shared.h"
 
 FontData g_fontData[NFILE];
@@ -25,6 +27,9 @@ static HWND g_hwnd;
 static HINSTANCE g_inst;
 static int g_seconds; static unsigned g_ticks;
 static bool g_nosave, g_noact, g_demoUi;
+static int g_shotDpi = 96;
+static bool g_locked, g_displayOff;                                                  // a schermo bloccato o spento non si disegna
+static const GUID kDisplayState = { 0x6fe69556, 0x704a, 0x47a0, { 0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47 } };   // GUID_CONSOLE_DISPLAY_STATE
 static int g_pressed = -1, g_pressedArrow = -1; static bool g_tracking;
 static float g_minW = 420; static int g_minDrives = -1;
 static UINT g_msgTaskbar, g_msgShow;
@@ -398,6 +403,17 @@ static void TrayRemove(HWND hwnd)
 {
     NOTIFYICONDATAW n = { sizeof(n) }; n.hWnd = hwnd; n.uID = 1; Shell_NotifyIconW(NIM_DELETE, &n);
 }
+// il tooltip dell'icona dice i tre carichi: col pannello nascosto è l'unico posto dove si vedono
+static void TrayTip(HWND hwnd)
+{
+    static wchar_t last[64];
+    Sb b; b.t(L"Pulse 2 \x2014 CPU ").r(g_state.cpu).t(L"% \x00B7 RAM ").r(g_state.ramPct).c(L'%');
+    if (g_state.gpuOk) b.t(L" \x00B7 GPU ").r(g_state.gpu).c(L'%');
+    if (!lstrcmpW(last, b.s)) return;
+    lstrcpynW(last, b.s, 64);
+    NOTIFYICONDATAW n = { sizeof(n) }; n.hWnd = hwnd; n.uID = 1; n.uFlags = NIF_TIP | NIF_SHOWTIP; lstrcpynW(n.szTip, b.s, 64);
+    Shell_NotifyIconW(NIM_MODIFY, &n);
+}
 static void Popup(HWND hwnd, HMENU menu, int x, int y)
 {
     SetForegroundWindow(hwnd);                                                       // senza, il menu non si chiude cliccando altrove
@@ -491,12 +507,30 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         MINMAXINFO* m = (MINMAXINFO*)lp; int h = Px(hwnd, PanelHeight(g_state));
         m->ptMinTrackSize.x = Px(hwnd, MinWidth()); m->ptMaxTrackSize.x = Px(hwnd, 1600); m->ptMinTrackSize.y = m->ptMaxTrackSize.y = h;
         return 0; }
+    case WM_MOVING: {                                                               // trascinato vicino a un bordo dell'area di lavoro, il pannello si ferma a 12 unità: lo stesso margine degli angoli
+        RECT* r = (RECT*)lp; MONITORINFO mi = { sizeof(mi) }; GetMonitorInfoW(MonitorFromRect(r, MONITOR_DEFAULTTONEAREST), &mi);
+        const RECT& w = mi.rcWork; int m = Px(hwnd, 12), snap = Px(hwnd, 10), dx = 0, dy = 0;
+        if (abs(r->left - (w.left + m)) <= snap) dx = w.left + m - r->left; else if (abs(r->right - (w.right - m)) <= snap) dx = w.right - m - r->right;
+        if (abs(r->top - (w.top + m)) <= snap) dy = w.top + m - r->top; else if (abs(r->bottom - (w.bottom - m)) <= snap) dy = w.bottom - m - r->bottom;
+        OffsetRect(r, dx, dy);
+        return TRUE; }
+    case WM_WTSSESSION_CHANGE:                                                      // sessione bloccata: nessuno guarda
+        if (wp == WTS_SESSION_LOCK) g_locked = true; else if (wp == WTS_SESSION_UNLOCK) { g_locked = false; InvalidateRect(hwnd, nullptr, FALSE); }
+        return 0;
+    case WM_POWERBROADCAST:
+        if (wp == PBT_POWERSETTINGCHANGE) {
+            const POWERBROADCAST_SETTING* ps = (const POWERBROADCAST_SETTING*)lp;
+            if (ps && IsEqualGUID(ps->PowerSetting, kDisplayState) && ps->DataLength >= 4) { g_displayOff = *(const DWORD*)ps->Data == 0; if (!g_displayOff) InvalidateRect(hwnd, nullptr, FALSE); }
+        }
+        return TRUE;
     case WM_ERASEBKGND: return 1;
     case WM_TIMER: {
         MetricsTick(g_state); SlowCopy(g_state); SensorsExchange(g_state); FitHeight(hwnd);
         static ULONGLONG minute; if (g_state.uptimeSec / 60 != minute) { minute = g_state.uptimeSec / 60; TipsLayout(hwnd); }   // la riga della testata si allunga coi minuti
-        if (IsWindowVisible(hwnd)) InvalidateRect(hwnd, nullptr, FALSE);            // nascosto nel tray legge, così il minuto è pronto quando torna, ma non disegna
-        if (g_seconds && ++g_ticks >= (unsigned)g_seconds) DestroyWindow(hwnd);
+        // nascosto nel tray, a schermo bloccato o spento legge, così il minuto è pronto quando torna, ma non disegna
+        if (IsWindowVisible(hwnd) && !g_locked && !g_displayOff) InvalidateRect(hwnd, nullptr, FALSE);
+        if (g_ticks++ % 5 == 0) TrayTip(hwnd);
+        if (g_seconds && g_ticks >= (unsigned)g_seconds) DestroyWindow(hwnd);
         return 0; }
     case WM_SIZE:
         if (wp != SIZE_MINIMIZED && LOWORD(lp)) { g_set.width = (int)(LOWORD(lp) / Scale(hwnd) + .5f); DrawResize(hwnd); TipsLayout(hwnd); InvalidateRect(hwnd, nullptr, FALSE); }
@@ -549,7 +583,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
     case WM_COMMAND: Command(hwnd, LOWORD(wp)); return 0;
-    case WM_DESTROY: TrayRemove(hwnd); SettingsSave(); SlowStop(); PostQuitMessage(0); return 0;
+    case WM_DESTROY: WTSUnRegisterSessionNotification(hwnd); TrayRemove(hwnd); SettingsSave(); SlowStop(); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -611,14 +645,14 @@ static int Shot(const wchar_t* arg)
 {
     wchar_t path[MAX_PATH]; ReadPath(arg, path);
     ReadOnce();
-    int w = g_set.width, h = (int)(PanelHeight(g_state) + .5f);
+    int w = (int)(g_set.width * g_shotDpi / 96.f + .5f), h = (int)(PanelHeight(g_state) * g_shotDpi / 96.f + .5f);
     BITMAPINFO bi = {}; bi.bmiHeader.biSize = sizeof(bi.bmiHeader); bi.bmiHeader.biWidth = w; bi.bmiHeader.biHeight = -h; bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
     void* bits = nullptr; HDC dc = CreateCompatibleDC(nullptr); HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
     if (!bmp) return 2;
     SelectObject(dc, bmp);
     Ui ui = { -1, true, 0, false, -1 };
     if (g_demoUi) { ui.hot = BTN_FIT; ui.hotRegion = RG_TOPCPU + 1; ui.picker = true; ui.hotArrow = 1; }
-    bool ok = DrawToDc(dc, w, h, g_state, ui);
+    bool ok = DrawToDc(dc, w, h, (float)g_shotDpi, g_state, ui);
     GdiFlush();
     if (!ok) return 3;
     BITMAPFILEHEADER fh = {}; DWORD size = (DWORD)w * h * 4;
@@ -697,6 +731,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
     if (const wchar_t* p = Find(cmd, L"--pos")) { x = ReadInt(p); y = ReadInt(p); posGiven = true; }
     if (const wchar_t* p = Find(cmd, L"--theme")) { p = SkipSp(p); g_set.theme = *p == L'l' ? 1 : 0; }
     if (const wchar_t* p = Find(cmd, L"--seconds")) g_seconds = ReadInt(p);
+    if (const wchar_t* p = Find(cmd, L"--dpi")) { g_shotDpi = ReadInt(p); if (g_shotDpi < 96 || g_shotDpi > 384) g_shotDpi = 96; }
     ApplyTheme();
     if (const wchar_t* p = Find(cmd, L"--shot")) return Shot(p);
     if (const wchar_t* p = Find(cmd, L"--dump")) return Dump(p);
@@ -725,13 +760,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
 
     g_msgTaskbar = RegisterWindowMessageW(L"TaskbarCreated");
     TrayAdd(hwnd); TipsCreate(hwnd);
+    WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION); RegisterPowerSettingNotification(hwnd, &kDisplayState, DEVICE_NOTIFY_WINDOW_HANDLE);
     if (g_set.visible) {
         ShowWindow(hwnd, g_noact ? SW_SHOWNOACTIVATE : SW_SHOW);
         DrawPaint(hwnd, g_state, g_ui); ValidateRect(hwnd, nullptr);                // il primo fotogramma subito, senza aspettare WM_PAINT
     }
     { char line[96]; wsprintfA(line, "start first_frame_ms=%d pid=%u", MsSinceProcessStart(), GetCurrentProcessId()); LogLine(line); }
     if (const wchar_t* p = Find(cmd, L"--bench")) { int n = ReadInt(p); Bench(hwnd, n > 0 ? n : 300); DestroyWindow(hwnd); return 0; }
-    SetTimer(hwnd, 1, 1000, nullptr);
+    SetCoalescableTimer(hwnd, 1, 1000, nullptr, 100);                               // Windows può accorparlo ad altri risvegli entro un decimo di secondo
 
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) { TranslateMessage(&m); DispatchMessageW(&m); }

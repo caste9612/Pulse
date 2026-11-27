@@ -239,6 +239,13 @@ static void Lane(float x, float y, float w, float h, const float* v, unsigned co
         }
     }
 }
+// la scala scritta nell'angolo di un grafico, sopra la curva: una velina del colore del fondo la tiene leggibile quando la curva
+// le passa dietro
+static void ScaleLabel(float x, float y, const wchar_t* s)
+{
+    R(x + 1, y + 1, floorf(TextW(F_MONO9, s) + 5), 11, C_BG, .6f);
+    Text(F_MONO9, x + 3, y + 6, s, C_MUTED);
+}
 // rete e disco a specchio: entrata sopra, uscita sotto, su una scala tonda scritta nell'angolo. Linee dritte: sono valori a scatti
 static void Mirror(float x, float y, float w, float h, const float* a, const float* b, unsigned col)
 {
@@ -254,7 +261,7 @@ static void Mirror(float x, float y, float w, float h, const float* a, const flo
         Stroke(p + 2, HIST, 0, 0, 1.2f, col, half ? .7f : 1);
     }
     R(x, m, w, 1, col, .4f);
-    Text(F_MONO9, x + 3, y + 6, nc.label, C_MUTED);
+    ScaleLabel(x, y, nc.label);
 }
 // una barra per core logico: i thread dello stesso core fisico attaccati, uno spazio più largo tra un core e l'altro
 static void CoreBars(float x, float y, float w, float h, const State& s)
@@ -410,7 +417,6 @@ static void DrawStatic(float W, float H, int ndrive)
     Text(F_NAME, 36, 16, L"PULSE", C_TEXT);
     const float lanes[5] = { l.yCpu, l.yRam, l.yGpu, l.yNet, l.yDsk };
     for (int i = 0; i < 5; i++) { Bed(l.GX, lanes[i], l.GW, 32); if (i < 4) R(l.X, lanes[i] + (i < 3 ? 55 : 57), l.RW, 1, C_LINESOFT); }
-    Text(F_MONO9, l.GX + 3, l.yCpu + 6, L"100", C_MUTED);
     // il righello del tempo, sotto l'ultimo grafico: vale per tutti e cinque
     const float xw = (l.GW - 4) / (HIST - 1);
     for (int k = 5; k >= 1; k--) { Sb b; b.i(k * 10).t(L" s"); float w = TextW(F_MONO9, b.s); Text(F_MONO9, l.GX + (HIST - 1 - 10 * k) * xw - w / 2, l.yDsk + 43, b.s, C_MUTED); }
@@ -478,6 +484,7 @@ static void DrawPanel(const State& s, const Ui& ui, float W, float H)
     { Sb big, sec; big.f1(s.cpu).c(L'%'); if (Has(s.cpuTemp)) sec.r(s.cpuTemp).t(L"\x00B0" L"C"); else sec.t(L"n/a");
       Row3(y, L"CPU", C_CPU, big.s, sec.s, C_TEMP); }
     Lane(GX, y, GW, LH, s.hCpu, C_CPU, 0, s.hCt);
+    ScaleLabel(GX, y, L"100");
     { Sb b; if (s.ncore) b.t(L"\x2248 ").f1(s.coresInUse).t(L" cores");
       if (s.cpuGhz > 0) b.sep().f2(s.cpuGhz).t(L" GHz");
       if (Has(s.cpuWatt) && s.cpuWatt > 0) b.sep().r(s.cpuWatt).t(L" W");
@@ -555,14 +562,14 @@ void DrawPaint(HWND hwnd, const State& s, const Ui& ui)
     g_hrt->BeginDraw(); DrawPanel(s, ui, sz.width, sz.height);
     if (g_hrt->EndDraw() == D2DERR_RECREATE_TARGET) { Rel(g_static); Rel(g_hrt); g_rt = nullptr; DrawCreate(hwnd); }   // il bersaglio si è perso: si rifà
 }
-bool DrawToDc(HDC memdc, int w, int h, const State& s, const Ui& ui)
+bool DrawToDc(HDC memdc, int w, int h, float dpi, const State& s, const Ui& ui)
 {
     if (!InitFactories()) return false;
     ID2D1DCRenderTarget* dc = nullptr;
-    D2D1_RENDER_TARGET_PROPERTIES rp = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), 96, 96);
+    D2D1_RENDER_TARGET_PROPERTIES rp = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), dpi, dpi);
     if (FAILED(g_f->CreateDCRenderTarget(&rp, &dc))) return false;
     RECT rc = { 0, 0, w, h };
     if (FAILED(dc->BindDC(memdc, &rc)) || !ResCreate(dc)) return false;
-    dc->BeginDraw(); DrawPanel(s, ui, (float)w, (float)h);
+    dc->BeginDraw(); DrawPanel(s, ui, w * 96 / dpi, h * 96 / dpi);
     return SUCCEEDED(dc->EndDraw());
 }

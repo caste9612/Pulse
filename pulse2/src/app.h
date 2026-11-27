@@ -182,4 +182,4 @@ bool DrawCreate(HWND hwnd);
 void DrawResize(HWND hwnd);
 void DrawThemeChanged();                                                             // il tema è cambiato: si rifanno letto puntinato e sfumature
 void DrawPaint(HWND hwnd, const State& s, const Ui& ui);
-bool DrawToDc(HDC memdc, int w, int h, const State& s, const Ui& ui);                // una resa fuori schermo, senza finestra
+bool DrawToDc(HDC memdc, int w, int h, float dpi, const State& s, const Ui& ui);     // una resa fuori schermo, senza finestra; w e h in pixel
