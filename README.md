@@ -75,7 +75,7 @@ its tasks in [docs/INSTALLER.md](docs/INSTALLER.md).
 
 ## Footprint
 
-On the reference PC (Ryzen 9 7950X, RTX 5070 Ti, Windows 11), v1.3.0 uses about 2.1% of one core with the
+On the reference PC (Ryzen 9 7950X, RTX 5070 Ti, Windows 11), v1.4.0 uses about 1.7% of one core with the
 widget visible and 1.5% hidden in the tray, with about 130 MB of private memory. The metrics are read with direct
 Win32 calls instead of .NET's PerformanceCounter or WMI, and the slower ones are polled less often. The
 measurements of each release and the choices behind them are in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).

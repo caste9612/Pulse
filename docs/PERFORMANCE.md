@@ -20,7 +20,7 @@ Pulse was built with obsessive focus on minimising its own footprint. After seve
 | **Single-file exe** | 7 MB (10.3 MB in v1.2.0, 10.5 MB in v1.3.0) | + 1.5 MB of native LHM dependencies; v1.2.0 embeds the Reticle UI library and its fonts |
 | **Installer** | 4.4 MB | + portable zip 3.7 MB |
 
-The table was measured on v1.1.0. For v1.2.0 and v1.3.0 see below.
+The table was measured on v1.1.0. For the releases after it see below.
 
 ### v1.2.0: the Reticle UI
 
@@ -64,6 +64,23 @@ v1.3.1 was checked on a second PC, the opposite of the reference one: Intel Core
 | CPU clock | 3.50 GHz, the base clock, at all times | 2.5–3.0 GHz at rest, 4.6 GHz under load |
 
 As administrator, the way Pulse runs on that PC, two more alternated rounds gave 4.00% and 3.70% of one core: the PC was busier, and the gap is within the noise there too.
+
+### v1.4.0: the panel redrawn
+
+v1.4.0 redraws the panel and reads nothing new: a level behind each value, mirrored graphs for network and disk, the temperature as a line in the CPU and GPU graphs, a time grid, a bar behind each row of the top lists, which now add up the processes of a program. Measured on 26 and 27/11/2026 with the PC idle (2 to 6.5% busy over the rounds), same 514 × 573 window, v1.3.3 and v1.4.0 alternated: four 45 s rounds each with the widget visible, two hidden in the tray, not elevated (compare within this table only):
+
+| Metric | v1.3.3 | v1.4.0 |
+|---|---|---|
+| CPU, widget visible | 1.71% of one core | 1.65% |
+| CPU, widget hidden in the tray | 1.43% | 1.51% |
+| GPU (3D engine) of Pulse | 0.04% | 0.04% |
+| Dedicated video memory | 17 MB | 16 MB |
+| Private memory / working set | 131 / 213 MB | 132 / 218 MB |
+| Handles | ~920 | ~920 |
+| Cold start (message loop ready) | ~500 ms | ~530 ms |
+| Exe size | 10.54 MB | 10.59 MB |
+
+The two CPU rows are the same within the noise of the method: single rounds went from 1.46 to 2.00% with the widget visible, where v1.4.0 came out lower in three of the four pairs, and hidden it did in one of the two. One of the four visible rounds of v1.4.0 read 0.15% of GPU instead of 0.04%: the compositor was busier in those seconds too, as it was in a round with the widget hidden, and two more rounds a day later read 0.04% again. The compositor (dwm) is not in the table because it says nothing here: 2.2–5.9% of one core with either version on screen, 1.5–4.9% with the widget hidden, when neither draws. The start is about 30 ms slower, the larger window to build.
 
 ### How we got here (the things that matter)
 
