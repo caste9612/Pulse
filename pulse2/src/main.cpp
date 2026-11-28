@@ -390,29 +390,41 @@ static void ProgramCommand(HWND hwnd, int id)
 }
 
 // ---- tray ----
-static void TrayAdd(HWND hwnd)
+// L'icona può non esserci senza che Pulse lo sappia: la shell non era pronta all'avvio, è ripartita, oppure una barra di terze parti
+// si è agganciata al tray dopo di noi. Due rimedi: «TaskbarCreated» la rimette, e la rimette ogni aggiornamento del tooltip che la
+// shell rifiuta. Rimetterla vuol dire toglierla e aggiungerla: chi teneva ancora quella vecchia non ne mostra due
+static wchar_t g_trayTip[64];                                                        // l'ultimo tooltip che la shell ha preso; vuoto = va ridato
+static bool TrayAdd(HWND hwnd)
 {
+    static HICON icon;                                                               // caricata una volta: la shell se ne fa una copia
+    if (!icon) icon = (HICON)LoadImageW(g_inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
     NOTIFYICONDATAW n = { sizeof(n) };
-    n.hWnd = hwnd; n.uID = 1; n.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP; n.uCallbackMessage = WM_TRAY;
-    n.hIcon = (HICON)LoadImageW(g_inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+    n.hWnd = hwnd; n.uID = 1; n.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP; n.uCallbackMessage = WM_TRAY; n.hIcon = icon;
     lstrcpyW(n.szTip, L"Pulse 2");
-    Shell_NotifyIconW(NIM_ADD, &n);
+    g_trayTip[0] = 0;
+    if (!Shell_NotifyIconW(NIM_ADD, &n)) return false;
     n.uVersion = NOTIFYICON_VERSION_4; Shell_NotifyIconW(NIM_SETVERSION, &n);
+    return true;
 }
 static void TrayRemove(HWND hwnd)
 {
     NOTIFYICONDATAW n = { sizeof(n) }; n.hWnd = hwnd; n.uID = 1; Shell_NotifyIconW(NIM_DELETE, &n);
 }
-// il tooltip dell'icona dice i tre carichi: col pannello nascosto è l'unico posto dove si vedono
+static void TrayRestore(HWND hwnd) { TrayRemove(hwnd); TrayAdd(hwnd); }
+// il tooltip dell'icona dice i tre carichi: col pannello nascosto è l'unico posto dove si vedono. Si ridà quando cambia e comunque
+// ogni mezzo minuto: è da qui che ci si accorge che per la shell l'icona non esiste più
 static void TrayTip(HWND hwnd)
 {
-    static wchar_t last[64];
+    static unsigned same;
     Sb b; b.t(L"Pulse 2 \x2014 CPU ").r(g_state.cpu).t(L"% \x00B7 RAM ").r(g_state.ramPct).c(L'%');
     if (g_state.gpuOk) b.t(L" \x00B7 GPU ").r(g_state.gpu).c(L'%');
-    if (!lstrcmpW(last, b.s)) return;
-    lstrcpynW(last, b.s, 64);
+    if (!lstrcmpW(g_trayTip, b.s) && ++same % 6) return;
     NOTIFYICONDATAW n = { sizeof(n) }; n.hWnd = hwnd; n.uID = 1; n.uFlags = NIF_TIP | NIF_SHOWTIP; lstrcpynW(n.szTip, b.s, 64);
-    Shell_NotifyIconW(NIM_MODIFY, &n);
+    if (Shell_NotifyIconW(NIM_MODIFY, &n)) { lstrcpynW(g_trayTip, b.s, 64); return; }
+    // rifiutato. Se la shell non ha risposto in tempo l'icona c'è ancora e si riprova al prossimo giro; altrimenti non c'è più
+    bool timeout = GetLastError() == ERROR_TIMEOUT;
+    g_trayTip[0] = 0;
+    if (!timeout) TrayRestore(hwnd);
 }
 static void Popup(HWND hwnd, HMENU menu, int x, int y)
 {
@@ -490,7 +502,7 @@ static void SetHover(HWND hwnd, int button, int region, int arrow)
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
-    if (msg == g_msgTaskbar && msg) { TrayAdd(hwnd); return 0; }                    // Esplora risorse è ripartito: l'icona va rimessa
+    if (msg == g_msgTaskbar && msg) { TrayRestore(hwnd); return 0; }                // la shell è ripartita, o una barra si è appena agganciata al tray: l'icona va rimessa
     if (msg == g_msgShow && msg) { ShowPanel(hwnd, true); return 0; }               // un secondo Pulse 2 è stato avviato: si mostra questo
     switch (msg) {
     case WM_NCHITTEST: {                                                            // i lati allargano, la testata trascina, i bottoni e il corpo sono del pannello
@@ -760,6 +772,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
     if (!DrawCreate(hwnd)) { LogLine("drawing start FAILED"); return 4; }
 
     g_msgTaskbar = RegisterWindowMessageW(L"TaskbarCreated");
+    // Il pannello gira senza diritti di amministratore, e allora questa riga non cambia niente. Se però qualcuno lo avvia elevato,
+    // senza di lei l'annuncio della shell (che elevata non è) verrebbe fermato prima di arrivare. Si apre solo a questo messaggio,
+    // che non porta dati: non ai comandi, che arrivano dal nostro stesso menu
+    ChangeWindowMessageFilterEx(hwnd, g_msgTaskbar, MSGFLT_ALLOW, nullptr);
     TrayAdd(hwnd); TipsCreate(hwnd);
     WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION); RegisterPowerSettingNotification(hwnd, &kDisplayState, DEVICE_NOTIFY_WINDOW_HANDLE);
     if (g_set.visible) {

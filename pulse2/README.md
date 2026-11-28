@@ -27,7 +27,9 @@ programs instead of processes) with Direct2D rendered by the CPU, on an opaque b
   (four arrows open under it, one per corner of the screen), always on top, hide. Light and dark theme, or the one
   Windows uses; menus and tooltips follow it.
 - **Tray icon** with its menu (show or hide, theme, always on top, start with Windows, exit) and the three loads in
-  its tooltip, **settings** in `%APPDATA%\Pulse2\settings.txt`, a **single instance**.
+  its tooltip, **settings** in `%APPDATA%\Pulse2\settings.txt`, a **single instance**. If the shell loses the icon
+  (it restarted, was not ready at startup, or a third-party bar hooked the tray later), Pulse 2 puts it back: at once
+  when the shell announces itself, otherwise at the next tooltip update, within half a minute.
 - **Drawing only when someone can see it**: hidden in the tray, with the session locked or the display off, Pulse 2
   keeps reading, so the last minute is there when it comes back, but draws nothing.
 - **Tooltips** for the cores, the memory, the GPU, the power estimate, the header buttons and each program row, and the
