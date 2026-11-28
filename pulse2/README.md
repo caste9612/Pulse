@@ -17,6 +17,11 @@ programs instead of processes) with Direct2D rendered by the CPU, on an opaque b
     every 2 s, the average CPU speed as in Task Manager (PerfLib V2, with the clock Windows reports as a fallback),
     ping, adapter and local address (when Windows reports a change and once a minute), drives every 30 s, the public
     address every ten minutes.
+- **Five graphs, one style**: the same curve, line width, fade and dot on the latest value for CPU, memory, GPU,
+  network and disk. The curve passes through the readings and between two of them never goes above the higher or
+  below the lower, so a spike looks as high as it was. Network and disk are mirrored, in above the axis and out below
+  it; with nothing passing the two lines lie on the axis as one. (Pulse 1.4 draws these two with straight lines and
+  a flat fill.)
 - **The window**: no frame, dragged by its header, resized from its left and right edges; its height is always the
   content's. Dragged near an edge of the screen's work area it stops 12 units from it. Header buttons: fit, corner
   (four arrows open under it, one per corner of the screen), always on top, hide. Light and dark theme, or the one
@@ -76,7 +81,7 @@ Checked on the reference PC on 27/11/2026, next to the installed Pulse:
 | `--theme dark\|light` | theme, instead of the saved one |
 | `--nosave` | a test copy: reads and writes no settings, no single instance |
 | `--noactivate`, `--seconds <n>` | don't take the focus; close after n seconds |
-| `--shot <file.bmp>` | read for a second, render one frame off screen, save it and exit; `--demo-ui` adds a hovered row and the open corner arrows, `--dpi <n>` another scale (144 is 150%) |
+| `--shot <file.bmp>` | read for a second, render one frame off screen, save it and exit; `--demo-ui` adds a hovered row and the open corner arrows, `--demo-data` uses the made-up data of `--bench`, `--dpi <n>` another scale (144 is 150%) |
 | `--bench <n>` | draw n frames in a row with the same made-up data and log the CPU each one cost |
 | `--dump <file.txt>` | read for a second and write the readings, the regions and their tooltips as text |
 

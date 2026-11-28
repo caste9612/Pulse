@@ -7,7 +7,7 @@
 //   --noactivate        non prende il fuoco quando si apre  --nosave         prova: non legge né scrive impostazioni, niente istanza unica
 //   --shot <file.bmp>   legge i dati per un secondo, disegna un fotogramma fuori schermo, lo salva ed esce (nessuna finestra);
 //                       con --demo-ui disegna anche una riga sotto il mouse e la scelta dell'angolo aperta, con --dpi <n> a
-//                       un'altra scala (144 = 150 %)
+//                       un'altra scala (144 = 150 %), con --demo-data grafici ed elenchi hanno i dati finti di --bench
 //   --dump <file.txt>   legge i dati per un secondo e li scrive come testo, per confrontarli con i contatori di Windows
 //   --bench <n>         disegna n fotogrammi di fila con dati finti sempre uguali e scrive nel log quanta CPU è costato ognuno
 #include "app.h"
@@ -26,7 +26,7 @@ static Ui g_ui = { -1, true, 0, false, -1 };
 static HWND g_hwnd;
 static HINSTANCE g_inst;
 static int g_seconds; static unsigned g_ticks;
-static bool g_nosave, g_noact, g_demoUi;
+static bool g_nosave, g_noact, g_demoUi, g_demoData;
 static int g_shotDpi = 96;
 static bool g_locked, g_displayOff;                                                  // a schermo bloccato o spento non si disegna
 static const GUID kDisplayState = { 0x6fe69556, 0x704a, 0x47a0, { 0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47 } };   // GUID_CONSOLE_DISPLAY_STATE
@@ -645,6 +645,7 @@ static int Shot(const wchar_t* arg)
 {
     wchar_t path[MAX_PATH]; ReadPath(arg, path);
     ReadOnce();
+    if (g_demoData) BenchFill(g_state);                                             // i dati finti di --bench: grafici mossi anche a PC fermo
     int w = (int)(g_set.width * g_shotDpi / 96.f + .5f), h = (int)(PanelHeight(g_state) * g_shotDpi / 96.f + .5f);
     BITMAPINFO bi = {}; bi.bmiHeader.biSize = sizeof(bi.bmiHeader); bi.bmiHeader.biWidth = w; bi.bmiHeader.biHeight = -h; bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
     void* bits = nullptr; HDC dc = CreateCompatibleDC(nullptr); HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
@@ -710,7 +711,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
 {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     g_inst = inst;
-    g_nosave = Find(cmd, L"--nosave") != nullptr; g_noact = Find(cmd, L"--noactivate") != nullptr; g_demoUi = Find(cmd, L"--demo-ui") != nullptr;
+    g_nosave = Find(cmd, L"--nosave") != nullptr; g_noact = Find(cmd, L"--noactivate") != nullptr; g_demoUi = Find(cmd, L"--demo-ui") != nullptr; g_demoData = Find(cmd, L"--demo-data") != nullptr;
     bool tool = Find(cmd, L"--shot") || Find(cmd, L"--dump");
     if (tool) g_nosave = true;
 

@@ -27,7 +27,7 @@ static ID2D1RenderTarget* g_rt;          // il bersaglio in uso: la finestra, un
 static ID2D1HwndRenderTarget* g_hrt;
 static ID2D1SolidColorBrush* g_br;
 static ID2D1BitmapBrush* g_dots;
-static ID2D1LinearGradientBrush* g_grad[3];
+static ID2D1LinearGradientBrush* g_grad[5];  // CPU, RAM, GPU: dall'alto in basso; rete e disco: dai due bordi verso l'asse
 // le parti fisse, già disegnate: valgono per una larghezza, un'altezza e un tema
 static ID2D1Bitmap* g_static; static float g_staticW, g_staticH; static const Theme* g_staticTheme;
 
@@ -86,10 +86,10 @@ static bool InitFactories()
     return true;
 }
 
-// le risorse legate al bersaglio: il pennello, il letto puntinato sotto i grafici, le tre sfumature
+// le risorse legate al bersaglio: il pennello, il letto puntinato sotto i grafici, le cinque sfumature
 static bool ResCreate(ID2D1RenderTarget* rt)
 {
-    Rel(g_br); Rel(g_dots); Rel(g_static); for (int i = 0; i < 3; i++) Rel(g_grad[i]);
+    Rel(g_br); Rel(g_dots); Rel(g_static); for (int i = 0; i < 5; i++) Rel(g_grad[i]);
     g_rt = rt;
     if (FAILED(rt->CreateSolidColorBrush(Col(C_TEXT), &g_br))) return false;
     rt->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
@@ -103,11 +103,12 @@ static bool ResCreate(ID2D1RenderTarget* rt)
         if (SUCCEEDED(crt->GetBitmap(&bm))) { rt->CreateBitmapBrush(bm, D2D1::BitmapBrushProperties(D2D1_EXTEND_MODE_WRAP, D2D1_EXTEND_MODE_WRAP), &g_dots); bm->Release(); }
         crt->Release();
     }
-    const unsigned gc[3] = { C_CPU, C_RAM, C_GPU };
-    for (int i = 0; i < 3; i++) {
-        D2D1_GRADIENT_STOP stop[2] = { { 0, Col(gc[i], .28f) }, { 1, Col(gc[i], 0) } };
+    const unsigned gc[5] = { C_CPU, C_RAM, C_GPU, C_NET, C_DSK };
+    for (int i = 0; i < 5; i++) {
+        D2D1_GRADIENT_STOP stop[3] = { { 0, Col(gc[i], .28f) }, { 1, Col(gc[i], 0) }, { 1, Col(gc[i], .28f) } };
+        if (i >= 3) stop[1].position = .5f;                                         // a specchio: la stessa forza ai due bordi, niente in mezzo
         ID2D1GradientStopCollection* sc = nullptr;
-        if (SUCCEEDED(rt->CreateGradientStopCollection(stop, 2, &sc))) {
+        if (SUCCEEDED(rt->CreateGradientStopCollection(stop, i >= 3 ? 3 : 2, &sc))) {
             rt->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(D2D1::Point2F(0, 0), D2D1::Point2F(0, 1)), sc, &g_grad[i]); sc->Release();
         }
     }
@@ -201,43 +202,74 @@ static void Bed(float x, float y, float w, float h)
     const float xw = (w - 4) / (HIST - 1);
     for (int k = 1; k <= 5; k++) R(floorf(x + (HIST - 1 - 10 * k) * xw + .5f), y, 1, h, C_TEXT, g_theme->grid);
 }
-static ID2D1PathGeometry* Curve(const float* v, float x, float y, float w, float h, float max, bool closed)
-{
-    ID2D1PathGeometry* g = nullptr; ID2D1GeometrySink* k = nullptr;
-    if (FAILED(g_f->CreatePathGeometry(&g))) return nullptr;
-    if (FAILED(g->Open(&k))) { g->Release(); return nullptr; }
-    const float top = y + 3, bot = y + h - 1.5f, xw = (w - 4) / (HIST - 1);
-    auto X = [&](int i) { return x + i * xw; };
-    auto Y = [&](float val) { return bot - Clampf(val / max, 0, 1) * (bot - top); };
-    k->BeginFigure(D2D1::Point2F(X(0), Y(v[0])), closed ? D2D1_FIGURE_BEGIN_FILLED : D2D1_FIGURE_BEGIN_HOLLOW);
-    for (int i = 0; i < HIST - 1; i++) {                                            // la stessa spline cardinale di Pulse 1.x
-        float y0 = Y(v[i > 0 ? i - 1 : 0]), y1 = Y(v[i]), y2 = Y(v[i + 1]), y3 = Y(v[i + 2 < HIST ? i + 2 : HIST - 1]);
-        k->AddBezier(D2D1::BezierSegment(D2D1::Point2F(X(i) + xw / 3, Clampf(y1 + (y2 - y0) / 6, top, bot)),
-                                         D2D1::Point2F(X(i + 1) - xw / 3, Clampf(y2 - (y3 - y1) / 6, top, bot)), D2D1::Point2F(X(i + 1), y2)));
+// ---- la curva dei grafici: una sola per tutti e cinque ----
+// Passa per i valori, e tra un valore e il successivo non sale né scende oltre i due (pendenze di Steffen): un picco di rete o di
+// disco non sembra più alto di quanto è stato, e un tratto fermo resta dritto. I valori arrivano già in y, un passo xw l'uno
+// dall'altro a partire da x0
+struct Shape {
+    ID2D1PathGeometry* g; ID2D1GeometrySink* k;
+    bool Open()
+    {
+        g = nullptr; k = nullptr;
+        if (FAILED(g_f->CreatePathGeometry(&g))) return false;
+        if (FAILED(g->Open(&k))) { g->Release(); g = nullptr; return false; }
+        return true;
     }
-    if (closed) { k->AddLine(D2D1::Point2F(X(HIST - 1), y + h)); k->AddLine(D2D1::Point2F(x, y + h)); }
-    k->EndFigure(closed ? D2D1_FIGURE_END_CLOSED : D2D1_FIGURE_END_OPEN); k->Close(); k->Release();
-    return g;
-}
+    void Spline(const float* ys, int n, float x0, float xw)
+    {
+        float m0 = ys[1] - ys[0];
+        for (int i = 0; i + 1 < n; i++) {
+            float d = ys[i + 1] - ys[i], m1 = d;
+            if (i + 2 < n) {
+                float e = ys[i + 2] - ys[i + 1];
+                if (d * e <= 0) m1 = 0;                                             // un massimo o un minimo: lì la curva è piatta
+                else { float ad = fabsf(d), ae = fabsf(e), lim = 2 * (ad < ae ? ad : ae); m1 = (d + e) / 2; if (fabsf(m1) > lim) m1 = m1 < 0 ? -lim : lim; }
+            }
+            k->AddBezier(D2D1::BezierSegment(D2D1::Point2F(x0 + i * xw + xw / 3, ys[i] + m0 / 3), D2D1::Point2F(x0 + (i + 1) * xw - xw / 3, ys[i + 1] - m1 / 3),
+                                             D2D1::Point2F(x0 + (i + 1) * xw, ys[i + 1])));
+            m0 = m1;
+        }
+    }
+    void Line(const float* ys, int n, float x0, float xw)
+    {
+        if (n < 2) return;
+        k->BeginFigure(D2D1::Point2F(x0, ys[0]), D2D1_FIGURE_BEGIN_HOLLOW); Spline(ys, n, x0, xw); k->EndFigure(D2D1_FIGURE_END_OPEN);
+    }
+    void Area(const float* ys, int n, float x0, float xw, float base)             // l'area tra la curva e la riga base
+    {
+        if (n < 2) return;
+        k->BeginFigure(D2D1::Point2F(x0, ys[0]), D2D1_FIGURE_BEGIN_FILLED); Spline(ys, n, x0, xw);
+        k->AddLine(D2D1::Point2F(x0 + (n - 1) * xw, base)); k->AddLine(D2D1::Point2F(x0, base)); k->EndFigure(D2D1_FIGURE_END_CLOSED);
+    }
+    ID2D1PathGeometry* Done() { k->Close(); k->Release(); k = nullptr; return g; }
+};
+// i tratti che i grafici hanno in comune: linea da 1,5 con le giunte tonde, sfumatura sotto, un punto sull'ultimo valore
+static const float kLineW = 1.5f, kDotR = 2.2f, kPadTop = 3;
+static void Dot(float x, float y, unsigned col) { g_br->SetColor(Col(col)); g_rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x, y), kDotR, kDotR), g_br); }
+
 // grafico del carico, con la temperatura come linea sottile sulla stessa scala 0-100; la linea si interrompe dove la temperatura non c'era
 static void Lane(float x, float y, float w, float h, const float* v, unsigned col, int gi, const float* temp)
 {
-    if (g_grad[gi]) if (ID2D1PathGeometry* a = Curve(v, x, y, w, h, 100, true)) {       // l'area: il suo bordo sta sotto la linea, non serve ammorbidirlo
+    const float top = y + kPadTop, bot = y + h - 1.5f, xw = (w - 4) / (HIST - 1);
+    float ys[HIST]; for (int i = 0; i < HIST; i++) ys[i] = bot - Clampf(v[i] / 100, 0, 1) * (bot - top);
+    Shape s;
+    if (g_grad[gi] && s.Open()) {                                                   // l'area: il suo bordo sta sotto la linea, non serve ammorbidirlo
+        s.Area(ys, HIST, x, xw, y + h); ID2D1PathGeometry* a = s.Done();
         g_grad[gi]->SetStartPoint(D2D1::Point2F(0, y)); g_grad[gi]->SetEndPoint(D2D1::Point2F(0, y + h)); g_rt->FillGeometry(a, g_grad[gi]); a->Release();
     }
     Smooth(true);
-    if (ID2D1PathGeometry* l = Curve(v, x, y, w, h, 100, false)) { g_br->SetColor(Col(col)); g_rt->DrawGeometry(l, g_br, 1.5f, g_round); l->Release(); }
-    const float top = y + 3, bot = y + h - 1.5f, xw = (w - 4) / (HIST - 1);
-    g_br->SetColor(Col(col)); g_rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x + (HIST - 1) * xw, bot - Clampf(v[HIST - 1] / 100, 0, 1) * (bot - top)), 2.2f, 2.2f), g_br);
-    Smooth(false);
-    if (temp) {
-        float p[2 * HIST]; int n = 0;
+    if (s.Open()) { s.Line(ys, HIST, x, xw); ID2D1PathGeometry* l = s.Done(); g_br->SetColor(Col(col)); g_rt->DrawGeometry(l, g_br, kLineW, g_round); l->Release(); }
+    Dot(x + (HIST - 1) * xw, ys[HIST - 1], col);
+    if (temp) {                                                                     // la temperatura: la stessa curva, sottile, un tratto per ogni serie di letture riuscite
+        float ts[HIST]; int n = 0; bool open = false;
         for (int i = 0; i <= HIST; i++) {
-            if (i < HIST && Has(temp[i])) { p[2 * n] = x + i * xw; p[2 * n + 1] = bot - Clampf(temp[i] / 100, 0, 1) * (bot - top); n++; continue; }
-            if (n > 1) Stroke(p, n, 0, 0, 1, C_TEMP);
+            if (i < HIST && Has(temp[i])) { ts[n++] = bot - Clampf(temp[i] / 100, 0, 1) * (bot - top); continue; }
+            if (n > 1 && (open || (open = s.Open()))) s.Line(ts, n, x + (i - n) * xw, xw);
             n = 0;
         }
+        if (open) { ID2D1PathGeometry* l = s.Done(); g_br->SetColor(Col(C_TEMP)); g_rt->DrawGeometry(l, g_br, 1, g_round); l->Release(); }
     }
+    Smooth(false);
 }
 // la scala scritta nell'angolo di un grafico, sopra la curva: una velina del colore del fondo la tiene leggibile quando la curva
 // le passa dietro
@@ -246,21 +278,26 @@ static void ScaleLabel(float x, float y, const wchar_t* s)
     R(x + 1, y + 1, floorf(TextW(F_MONO9, s) + 5), 11, C_BG, .6f);
     Text(F_MONO9, x + 3, y + 6, s, C_MUTED);
 }
-// rete e disco a specchio: entrata sopra, uscita sotto, su una scala tonda scritta nell'angolo. Linee dritte: sono valori a scatti
-static void Mirror(float x, float y, float w, float h, const float* a, const float* b, unsigned col)
+// rete e disco a specchio: entrata sopra l'asse, uscita sotto, su una scala tonda scritta nell'angolo. Stessa curva, stesso spessore,
+// stessa sfumatura e stesso punto finale dei grafici del carico. Le due linee si disegnano in un colpo solo: dove non passa niente
+// stanno tutte e due sull'asse e fanno una linea sola, come quella di un grafico fermo
+static void Mirror(float x, float y, float w, float h, const float* a, const float* b, unsigned col, int gi)
 {
     float ma = MaxOf(a), mb = MaxOf(b); Nice nc = NiceScale(ma > mb ? ma : mb);
-    const float m = floorf(y + h / 2 + .5f), xw = (w - 4) / (HIST - 1);
-    for (int half = 0; half < 2; half++) {
-        const float* v = half ? b : a; const float dir = half ? 1.f : -1.f;
-        float p[2 * (HIST + 2)];
-        p[0] = x; p[1] = m;
-        for (int i = 0; i < HIST; i++) { p[2 * (i + 1)] = x + i * xw; p[2 * (i + 1) + 1] = m + dir * (1 + Clampf(v[i] / nc.max, 0, 1) * (h / 2 - 4)); }
-        p[2 * (HIST + 1)] = x + (HIST - 1) * xw; p[2 * (HIST + 1) + 1] = m;
-        if (ID2D1PathGeometry* g = Lines(p, HIST + 2, true)) { g_br->SetColor(Col(col, half ? .14f : .30f)); g_rt->FillGeometry(g, g_br); g->Release(); }
-        Stroke(p + 2, HIST, 0, 0, 1.2f, col, half ? .7f : 1);
+    const float m = floorf(y + h / 2 + .5f), ax = m + .5f, xw = (w - 4) / (HIST - 1), span = h / 2 - kPadTop;
+    float up[HIST], dn[HIST];
+    for (int i = 0; i < HIST; i++) { up[i] = ax - Clampf(a[i] / nc.max, 0, 1) * span; dn[i] = ax + Clampf(b[i] / nc.max, 0, 1) * span; }
+    Shape s;
+    if (g_grad[gi] && s.Open()) {                                                   // piena verso i bordi, niente sull'asse
+        s.Area(up, HIST, x, xw, ax); s.Area(dn, HIST, x, xw, ax); ID2D1PathGeometry* g = s.Done();
+        g_grad[gi]->SetStartPoint(D2D1::Point2F(0, ax - h / 2)); g_grad[gi]->SetEndPoint(D2D1::Point2F(0, ax + h / 2)); g_rt->FillGeometry(g, g_grad[gi]); g->Release();
     }
-    R(x, m, w, 1, col, .4f);
+    R(x, m, floorf((HIST - 1) * xw + .5f), 1, col, .3f);                            // l'asse: si vede solo dove le due linee se ne staccano
+    Smooth(true);
+    if (s.Open()) { s.Line(up, HIST, x, xw); s.Line(dn, HIST, x, xw); ID2D1PathGeometry* l = s.Done(); g_br->SetColor(Col(col)); g_rt->DrawGeometry(l, g_br, kLineW, g_round); l->Release(); }
+    Dot(x + (HIST - 1) * xw, up[HIST - 1], col);
+    if (dn[HIST - 1] - up[HIST - 1] > .5f) Dot(x + (HIST - 1) * xw, dn[HIST - 1], col);
+    Smooth(false);
     ScaleLabel(x, y, nc.label);
 }
 // una barra per core logico: i thread dello stesso core fisico attaccati, uno spazio più largo tra un core e l'altro
@@ -514,14 +551,14 @@ static void DrawPanel(const State& s, const Ui& ui, float W, float H)
     y = l.yNet;
     LevelPair(y, s.hDown, s.hUp, C_NET);
     { Sb a, b; a.rate(s.down); b.rate(s.up); RowPair(y, L"NET", C_NET, a.s, b.s); }
-    Mirror(GX, y, GW, LH, s.hDown, s.hUp, C_NET);
+    Mirror(GX, y, GW, LH, s.hDown, s.hUp, C_NET, 3);
     { Sb b; b.t(s.adapter); if (Has(s.pingMs)) b.sep().t(L"ping ").r(s.pingMs).t(L" ms"); Text(F_L2, X, y + 43, b.s, C_MUTED, false, 180); }
     { Sb b; if (s.localIp[0]) b.t(L"local ").t(s.localIp); if (s.publicIp[0]) b.sep().t(L"pub ").t(s.publicIp); Text(F_L2, GX, y + 43, b.s, C_MUTED, false, GW); }
     // DSK
     y = l.yDsk;
     LevelPair(y, s.hDr, s.hDw, C_DSK);
     { Sb a, b; a.rate(s.dr); b.rate(s.dw); RowPair(y, L"DSK", C_DSK, a.s, b.s); }
-    Mirror(GX, y, GW, LH, s.hDr, s.hDw, C_DSK);
+    Mirror(GX, y, GW, LH, s.hDr, s.hDw, C_DSK, 4);
     // dischi: una riga per disco, il testo in una colonna larga quanto il più lungo, così le barre sono lunghe uguale
     y = l.yDrives;
     Sb dv[MAXDRIVE]; float dw = 0;
