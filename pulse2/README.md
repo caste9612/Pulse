@@ -106,6 +106,7 @@ Checked on the reference PC on 27/11/2026, next to the installed Pulse:
 | `--bench <n>` | draw n frames in a row with the same made-up data and log the CPU each one cost |
 | `--accent <0..4>`, `--opacity <0..2>`, `--density <0..1>` | the choices of the Appearance window, instead of the saved ones |
 | `--after <pid>` | wait for that Pulse 2 to exit before starting: added by Pulse 2 when it restarts itself |
+| `--test-hover` | for tests that send mouse messages to the window: what a move lights stays lit although the real mouse is elsewhere |
 | `--dump <file.txt>` | read for a second and write the readings, the regions and their tooltips as text |
 
 The sensors process builds with `dotnet build sensors` and takes `--fake` (made-up values instead of sensors and
