@@ -172,6 +172,10 @@ static void R(float x, float y, float w, float h, unsigned col, float a = 1)
     if (w <= 0 || h <= 0) return;
     g_br->SetColor(Col(col, a)); g_rt->FillRectangle(D2D1::RectF(x, y, x + w, y + h), g_br);
 }
+static void Frame(float x, float y, float w, float h, unsigned col)
+{
+    R(x, y, w, 1, col); R(x, y + h - 1, w, 1, col); R(x, y, 1, h, col); R(x + w - 1, y, 1, h, col);
+}
 static ID2D1PathGeometry* Lines(const float* xy, int n, bool closed)
 {
     ID2D1PathGeometry* g = nullptr; ID2D1GeometrySink* k = nullptr;
@@ -380,7 +384,7 @@ static void RowPair(float y, const wchar_t* lab, unsigned col, const wchar_t* a,
 enum { TOP_H = 11 + NTOP * 17 + 7 + 2 };
 static void TopFrame(float x, float y, float w, const wchar_t* legend)
 {
-    R(x, y, w, 1, C_LINE); R(x, y + TOP_H - 1, w, 1, C_LINE); R(x, y, 1, TOP_H, C_LINE); R(x + w - 1, y, 1, TOP_H, C_LINE);
+    Frame(x, y, w, TOP_H, C_LINE);
     float lw = TextW(F_LABEL, legend);                                              // la legenda sta sulla cornice, come nei Panel di Reticle
     R(x + 8, y - 5, lw + 12, 11, C_BG);
     Text(F_LABEL, x + 14, y, legend, C_TEXT);
@@ -461,7 +465,7 @@ static void DrawStatic(float W, float H, int ndrive)
     const Layout l = Lay(W, ndrive);
     g_rt->SetTransform(D2D1::Matrix3x2F::Identity()); Smooth(false);
     g_rt->Clear(Col(C_BG));
-    R(0, 0, W, 1, C_LINE); R(0, H - 1, W, 1, C_LINE); R(0, 0, 1, H, C_LINE); R(W - 1, 0, 1, H, C_LINE);
+    Frame(0, 0, W, H, C_LINE);
     Stroke(kLogoPts, 9, 12, 8, 1.6f, C_ACCENT);
     Text(F_NAME, 36, 16, L"PULSE", C_TEXT);
     const float lanes[5] = { l.yCpu, l.yRam, l.yGpu, l.yNet, l.yDsk };
@@ -494,12 +498,79 @@ static void DrawPicker(float W, int hot)
         { 4.5f,10, 4.5f,4.5f, 10,4.5f,   4.5f,4.5f, 12.5f,12.5f }, { 6,4.5f, 11.5f,4.5f, 11.5f,10,   11.5f,4.5f, 3.5f,12.5f },
         { 4.5f,6, 4.5f,11.5f, 10,11.5f,  4.5f,11.5f, 12.5f,3.5f }, { 11.5f,6, 11.5f,11.5f, 6,11.5f,  11.5f,11.5f, 3.5f,3.5f } };
     const float x = PickerX(W), y = HEADER_H, side = 2 * (PICK_PAD + PICK_CELL);
-    R(x, y, side, side, C_BG); R(x, y, side, 1, C_LINE); R(x, y + side - 1, side, 1, C_LINE); R(x, y, 1, side, C_LINE); R(x + side - 1, y, 1, side, C_LINE);
+    R(x, y, side, side, C_BG); Frame(x, y, side, side, C_LINE);
     for (int k = 0; k < 4; k++) {
         float cx, cy; PickerCell(W, k, cx, cy);
         if (k == hot) R(cx, cy, PICK_CELL, PICK_CELL, C_TEXT, .09f);
         Stroke(arrow[k], 3, cx + 6, cy + 6, 1.3f, k == hot ? C_TEXT : C_TEXT2); Stroke(arrow[k] + 6, 2, cx + 6, cy + 6, 1.3f, k == hot ? C_TEXT : C_TEXT2);
     }
+}
+
+// ---- la lettura di un secondo passato: col mouse su un grafico, una riga su tutti e cinque coi valori di quel secondo ----
+int GraphSecondAt(const State& s, float W, float x, float y)
+{
+    const Layout l = Lay(W, s.ndrive); const float lanes[5] = { l.yCpu, l.yRam, l.yGpu, l.yNet, l.yDsk };
+    if (x < l.GX - 3 || x >= l.GX + l.GW + 3) return -1;
+    for (int k = 0; k < 5; k++) {
+        if (y < lanes[k] || y >= lanes[k] + 32) continue;
+        const int i = (int)floorf((x - l.GX) / StepX(l.GW) + .5f);
+        return i < 0 ? 0 : i > HIST - 1 ? HIST - 1 : i;
+    }
+    return -1;
+}
+// una targhetta col valore, accanto alla riga; per rete e disco porta la freccia della colonna di sinistra (dir 1 giù, 2 su)
+static float PlateW(const wchar_t* s, int dir) { return floorf(TextW(F_MONO9, s) + (dir ? 17 : 9)); }
+static void Plate(float x, float y, const wchar_t* s, int dir)
+{
+    const float w = PlateW(s, dir);
+    R(x, y, w, 13, C_BG, .92f); Frame(x, y, w, 13, C_LINE);
+    if (dir) Arrow(F_MONO9, x + 4, y + 6.5f, dir == 1, C_TEXT2);
+    Text(F_MONO9, x + (dir ? 12 : 4), y + 6.5f, s, C_TEXT);
+}
+// il punto di quel secondo sulla curva, staccato dalla curva da un anello del colore del fondo
+static void Mark(float x, float y, unsigned col)
+{
+    g_br->SetColor(Col(C_BG)); g_rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x, y), 4, 4), g_br); Dot(x, y, col);
+}
+static void Cross(const State& s, const Layout& l, int i)
+{
+    const float xw = StepX(l.GW), cx = l.GX + i * xw, x = floorf(cx);
+    const float lanes[5] = { l.yCpu, l.yRam, l.yGpu, l.yNet, l.yDsk };
+    const float* load[3] = { s.hCpu, s.hRam, s.hGpu }; const float* temp[3] = { s.hCt, nullptr, s.hGt }; const unsigned lc[3] = { C_CPU, C_RAM, C_GPU };
+    const float* flow[4] = { s.hDown, s.hUp, s.hDr, s.hDw }; const unsigned mc[2] = { C_NET, C_DSK };
+    // prima i testi: le targhette stanno tutte dallo stesso lato della riga, quello dove ci sta la più larga
+    Sb t[7]; float wide = 0;
+    for (int k = 0; k < 3; k++) {
+        if (k == 2 && !s.gpuOk) continue;
+        t[k].r(load[k][i]).c(L'%'); if (temp[k] && Has(temp[k][i])) t[k].sep().r(temp[k][i]).t(L"\x00B0" L"C");
+    }
+    for (int k = 0; k < 4; k++) t[3 + k].rate(flow[k][i]);
+    for (int k = 0; k < 7; k++) if (t[k].n) { const float w = PlateW(t[k].s, k < 3 ? 0 : 1); if (w > wide) wide = w; }
+    const bool left = x + 6 + wide > l.GX + l.GW;
+    auto px = [&](int k) { const float v = left ? x - 5 - PlateW(t[k].s, k < 3 ? 0 : 1) : x + 6; return v < l.GX ? l.GX : v; };
+
+    for (int k = 0; k < 5; k++) R(x, lanes[k], 1, 32, C_TEXT, .5f);
+    float frac[3], fu[2], fd[2], ax[2];
+    Smooth(true);
+    for (int k = 0; k < 3; k++) {
+        const float top = lanes[k] + kPadTop, bot = lanes[k] + 32 - 1.5f;
+        frac[k] = Clampf(load[k][i] / 100, 0, 1);
+        if (t[k].n) Mark(cx, bot - frac[k] * (bot - top), lc[k]);
+    }
+    for (int k = 0; k < 2; k++) {                                                    // le stesse misure di Mirror
+        const float ma = MaxOf(flow[2 * k]), mb = MaxOf(flow[2 * k + 1]), span = 16 - kPadTop; const Nice nc = NiceScale(ma > mb ? ma : mb);
+        ax[k] = floorf(lanes[3 + k] + 16.5f) + .5f;
+        fu[k] = Clampf(flow[2 * k][i] / nc.max, 0, 1) * span; fd[k] = Clampf(flow[2 * k + 1][i] / nc.max, 0, 1) * span;
+        Mark(cx, ax[k] - fu[k], mc[k]); if (fu[k] + fd[k] > .5f) Mark(cx, ax[k] + fd[k], mc[k]);
+    }
+    Smooth(false);
+    // carico e temperatura: la targhetta sta nella metà del grafico dove la curva non è; rete e disco: entrata sopra l'asse, uscita sotto
+    for (int k = 0; k < 3; k++) if (t[k].n) Plate(px(k), frac[k] > .5f ? lanes[k] + 18 : lanes[k] + 1, t[k].s, 0);
+    for (int k = 0; k < 2; k++) { Plate(px(3 + 2 * k), lanes[3 + k] + 1, t[3 + 2 * k].s, 1); Plate(px(4 + 2 * k), lanes[3 + k] + 18, t[4 + 2 * k].s, 2); }
+    // sul righello: quanti secondi fa
+    Sb ago; if (i == HIST - 1) ago.t(L"now"); else ago.i(HIST - 1 - i).t(L" s ago");
+    const float w = floorf(TextW(F_MONO9, ago.s) + 9), tx = Clampf(floorf(cx - w / 2), l.GX, l.GX + l.GW - w);
+    R(tx, l.yDsk + 37, w, 13, C_TEXT); Text(F_MONO9, tx + 4, l.yDsk + 43.5f, ago.s, C_BG);
 }
 
 static void DrawPanel(const State& s, const Ui& ui, float W, float H)
@@ -590,7 +661,114 @@ static void DrawPanel(const State& s, const Ui& ui, float W, float H)
     }
     TopRows(X, l.yTop, l.tw, s.topCpu, s.nTopCpu, true, ui.hotRegion >= RG_TOPCPU && ui.hotRegion < RG_TOPCPU + NTOP ? ui.hotRegion - RG_TOPCPU : -1);
     TopRows(X + RW - l.tw, l.yTop, l.tw, s.topRam, s.nTopRam, false, ui.hotRegion >= RG_TOPRAM && ui.hotRegion < RG_TOPRAM + NTOP ? ui.hotRegion - RG_TOPRAM : -1);
+    if (ui.cross > 0 && ui.cross <= HIST) Cross(s, l, ui.cross - 1);
     if (ui.picker) DrawPicker(W, ui.hotArrow);
+}
+
+// ---- tooltip e menu: finestrelle a parte (popups.cpp), disegnate con gli stessi pezzi ----
+// Sono piccole e di rado aperte: un solo bersaglio in memoria, legato ogni volta al DC di chi va disegnata, col suo pennello. Mentre
+// si disegna lì, il bersaglio e il pennello del pannello restano da parte
+static ID2D1DCRenderTarget* g_pop; static ID2D1SolidColorBrush* g_popBr;
+static ID2D1RenderTarget* g_backRt; static ID2D1SolidColorBrush* g_backBr;
+static bool PopBegin(HDC dc, int w, int h, float dpi)
+{
+    if (!InitFactories()) return false;
+    if (!g_pop) {
+        D2D1_RENDER_TARGET_PROPERTIES rp = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE));
+        if (FAILED(g_f->CreateDCRenderTarget(&rp, &g_pop))) return false;
+        if (FAILED(g_pop->CreateSolidColorBrush(Col(C_TEXT), &g_popBr))) { Rel(g_pop); return false; }
+        g_pop->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+    }
+    RECT rc = { 0, 0, w, h };
+    if (FAILED(g_pop->BindDC(dc, &rc))) return false;
+    g_pop->SetDpi(dpi, dpi);
+    g_backRt = g_rt; g_backBr = g_br; g_rt = g_pop; g_br = g_popBr;
+    g_pop->BeginDraw(); g_pop->SetTransform(D2D1::Matrix3x2F::Identity()); Smooth(false);
+    return true;
+}
+static void PopEnd()
+{
+    if (g_pop->EndDraw() == D2DERR_RECREATE_TARGET) { Rel(g_popBr); Rel(g_pop); }   // si rifà alla prossima
+    g_rt = g_backRt; g_br = g_backBr;
+}
+
+// un tooltip: righe da 17, a capo da solo oltre la larghezza massima; il fondo dei riquadri e il bordo del pannello
+static const float kTipMaxW = 420, kTipPadX = 10, kTipPadY = 6, kTipLine = 17;
+static IDWriteTextLayout* TipLayout(const wchar_t* text, float& w, float& h)
+{
+    IDWriteTextLayout* l = nullptr; const UINT32 n = (UINT32)lstrlenW(text);
+    if (!n || !InitFactories() || FAILED(g_dw->CreateTextLayout(text, n, g_fmt[F_TEXT], kTipMaxW, 2000, &l))) return nullptr;
+    l->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+    l->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, kTipLine, 13);
+    DWRITE_TEXT_RANGE r = { 0, n }; if (g_tnum) l->SetTypography(g_tnum, r);
+    DWRITE_TEXT_METRICS m = {}; l->GetMetrics(&m);
+    w = m.widthIncludingTrailingWhitespace; h = m.height;
+    return l;
+}
+void TipSize(const wchar_t* text, float& w, float& h)
+{
+    float tw = 0, th = 0; w = h = 0;
+    if (IDWriteTextLayout* l = TipLayout(text, tw, th)) { l->Release(); w = ceilf(tw) + 2 * kTipPadX; h = ceilf(th) + 2 * kTipPadY; }
+}
+void TipPaint(HDC dc, int wpx, int hpx, float dpi, const wchar_t* text)
+{
+    if (!PopBegin(dc, wpx, hpx, dpi)) return;
+    float tw = 0, th = 0;
+    g_rt->Clear(Col(C_SURF2)); Frame(0, 0, wpx * 96 / dpi, hpx * 96 / dpi, C_LINE);
+    if (IDWriteTextLayout* l = TipLayout(text, tw, th)) { g_br->SetColor(Col(C_TEXT)); g_rt->DrawTextLayout(D2D1::Point2F(kTipPadX, kTipPadY), l, g_br); l->Release(); }
+    PopEnd();
+}
+
+// un menu: voci alte 24, la voce sotto il mouse con la stessa velatura dei bottoni della testata, un segno di spunta nel colore
+// dell'accento davanti alle voci accese. La colonna delle spunte c'è solo nei menu che ne hanno
+static const float kMenuPad = 4, kMenuItemH = 24, kMenuSepH = 9, kMenuHeadH = 20;
+static float MenuRowH(const MenuItem& it) { return it.kind == MI_SEP ? kMenuSepH : it.kind == MI_HEAD ? kMenuHeadH : kMenuItemH; }
+static float MenuInset(const Menu& m)
+{
+    for (int i = 0; i < m.n; i++) if (m.it[i].checked) return 30;
+    return 14;
+}
+void MenuSize(const Menu& m, float& w, float& h)
+{
+    w = 160; h = 2 * kMenuPad;
+    if (!InitFactories()) return;
+    const float inset = MenuInset(m);
+    for (int i = 0; i < m.n; i++) {
+        const MenuItem& it = m.it[i]; h += MenuRowH(it);
+        if (it.kind == MI_SEP) continue;
+        const float tw = ceilf(TextW(it.kind == MI_HEAD ? F_LABEL : F_TEXT, it.text)) + inset + 18;
+        if (tw > w) w = tw;
+    }
+}
+int MenuItemAt(const Menu& m, float y)
+{
+    float yy = kMenuPad;
+    for (int i = 0; i < m.n; i++) {
+        const float rh = MenuRowH(m.it[i]);
+        if (y >= yy && y < yy + rh) return m.it[i].kind == MI_ITEM ? i : -1;
+        yy += rh;
+    }
+    return -1;
+}
+void MenuPaint(HDC dc, int wpx, int hpx, float dpi, const Menu& m)
+{
+    if (!PopBegin(dc, wpx, hpx, dpi)) return;
+    static const float check[6] = { 3.5f,8.5f, 6.5f,11.5f, 12.5f,4.5f };              // in una casella 16 x 16, come le icone della testata
+    const float W = wpx * 96 / dpi, H = hpx * 96 / dpi, inset = MenuInset(m);
+    g_rt->Clear(Col(C_SURF2)); Frame(0, 0, W, H, C_LINE);
+    float yy = kMenuPad;
+    for (int i = 0; i < m.n; i++) {
+        const MenuItem& it = m.it[i]; const float rh = MenuRowH(it);
+        if (it.kind == MI_SEP) R(8, floorf(yy + rh / 2), W - 16, 1, C_LINE);
+        else if (it.kind == MI_HEAD) Text(F_LABEL, inset, yy + rh / 2 + 1, it.text, C_MUTED);
+        else {
+            if (i == m.hot) R(4, yy, W - 8, rh, C_TEXT, .09f);
+            if (it.checked) Stroke(check, 3, 8, yy + 4, 1.4f, C_ACCENT);
+            Text(F_TEXT, inset, yy + rh / 2, it.text, C_TEXT);
+        }
+        yy += rh;
+    }
+    PopEnd();
 }
 
 // ---- bersagli ----

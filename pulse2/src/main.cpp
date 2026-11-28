@@ -1,22 +1,21 @@
 // Pulse 2: la finestra e quello che le sta intorno. Un pannello senza cornice che si trascina dalla testata e si allarga dai lati
 // (l'altezza è sempre quella del contenuto), quattro bottoni in testata (adatta, angolo, in primo piano, nascondi), un'icona nel
-// tray col suo menu, le impostazioni in %APPDATA%\Pulse2\settings.txt, un'istanza sola.
+// tray col suo menu, le impostazioni in %APPDATA%\Pulse2\settings.txt, un'istanza sola. Tooltip e menu li disegna Pulse (popups.cpp).
 //
 //   --pos <x> <y>       posizione della finestra            --width <n>      larghezza in unità (predefinita 514)
 //   --theme dark|light  tema, al posto di quello salvato    --seconds <n>    si chiude da solo dopo n secondi
 //   --noactivate        non prende il fuoco quando si apre  --nosave         prova: non legge né scrive impostazioni, niente istanza unica
 //   --shot <file.bmp>   legge i dati per un secondo, disegna un fotogramma fuori schermo, lo salva ed esce (nessuna finestra);
 //                       con --demo-ui disegna anche una riga sotto il mouse e la scelta dell'angolo aperta, con --dpi <n> a
-//                       un'altra scala (144 = 150 %), con --demo-data grafici ed elenchi hanno i dati finti di --bench
+//                       un'altra scala (144 = 150 %), con --demo-data grafici ed elenchi hanno i dati finti di --bench, con
+//                       --ago <n> la lettura di n secondi fa, come col mouse sui grafici
 //   --dump <file.txt>   legge i dati per un secondo e li scrive come testo, per confrontarli con i contatori di Windows
 //   --bench <n>         disegna n fotogrammi di fila con dati finti sempre uguali e scrive nel log quanta CPU è costato ognuno
 #include "app.h"
 #include <windowsx.h>
 #include <shellapi.h>
 #include <dwmapi.h>
-#include <commctrl.h>
 #include <tlhelp32.h>
-#include <uxtheme.h>
 #include <wtsapi32.h>
 #include "shared.h"
 
@@ -27,18 +26,16 @@ static HWND g_hwnd;
 static HINSTANCE g_inst;
 static int g_seconds; static unsigned g_ticks;
 static bool g_nosave, g_noact, g_demoUi, g_demoData;
-static int g_shotDpi = 96;
+static int g_shotDpi = 96, g_shotAgo = -1;
 static bool g_locked, g_displayOff;                                                  // a schermo bloccato o spento non si disegna
 static const GUID kDisplayState = { 0x6fe69556, 0x704a, 0x47a0, { 0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47 } };   // GUID_CONSOLE_DISPLAY_STATE
 static int g_pressed = -1, g_pressedArrow = -1; static bool g_tracking;
 static float g_minW = 420; static int g_minDrives = -1;
 static UINT g_msgTaskbar, g_msgShow;
-enum { WM_TRAY = WM_APP + 1 };
+enum { TIMER_TICK = 1, TIMER_TIP };
 enum { ID_SHOW = 1, ID_DARK, ID_LIGHT, ID_FOLLOW, ID_TOPMOST, ID_AUTOSTART, ID_EXIT, ID_CORNER = 10,   // ID_CORNER + 0..3: alto sx, alto dx, basso sx, basso dx
        ID_P_OPEN = 20, ID_P_PROPS, ID_P_END, ID_P_SEARCH };                           // il menu di un programma di Top CPU o Top RAM
-static HWND g_tip;                                                                    // il controllo dei tooltip
 static Region g_rg[48]; static int g_nrg;                                             // le zone del pannello, rifatte quando cambia la misura
-static wchar_t g_tipText[1100];
 static Program g_menuProg;                                                            // il programma su cui è aperto il menu
 
 // ---- piccoli attrezzi ----
@@ -151,30 +148,15 @@ static bool WindowsIsLight()
     DWORD v = 0, n = sizeof(v);
     return RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &v, &n) == ERROR_SUCCESS && v != 0;
 }
-// I menu e i tooltip sono quelli di Windows: almeno nel tono del pannello, scuri col tema scuro. Per i menu Windows non ha una
-// chiamata documentata: sono le due funzioni di uxtheme che usa Esplora risorse (numeri 135 e 136, da Windows 10 1903); se mancano
-// i menu restano chiari, e basta
-static void ControlsTheme(bool light)
-{
-    static bool tried; static int (WINAPI* setMode)(int); static void (WINAPI* flush)();
-    if (!tried) {
-        tried = true;
-        if (HMODULE ux = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)) {
-            setMode = (int (WINAPI*)(int))GetProcAddress(ux, MAKEINTRESOURCEA(135)); flush = (void (WINAPI*)())GetProcAddress(ux, MAKEINTRESOURCEA(136));
-        }
-    }
-    if (setMode && flush) { setMode(light ? 3 : 2); flush(); }                      // 2 = scuro, 3 = chiaro
-    if (g_tip) SetWindowTheme(g_tip, light ? L"Explorer" : L"DarkMode_Explorer", nullptr);
-}
 static void ApplyTheme()
 {
     bool light = g_set.theme == 1 || (g_set.theme == 2 && WindowsIsLight());
     const Theme* t = light ? &kLight : &kDark;
     if (t == g_theme && g_hwnd) return;
-    g_theme = t; ControlsTheme(light);
+    g_theme = t;
     if (!g_hwnd) return;
     BOOL dark = !light; DwmSetWindowAttribute(g_hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
-    DrawThemeChanged(); InvalidateRect(g_hwnd, nullptr, FALSE);
+    DrawThemeChanged(); InvalidateRect(g_hwnd, nullptr, FALSE); PopupsRedraw();
 }
 
 // ---- misura e posizione ----
@@ -229,27 +211,11 @@ static void ShowPanel(HWND hwnd, bool show)
     SettingsSave();
 }
 
-// ---- tooltip: una zona per ogni cosa che ha qualcosa da spiegare; il testo si fa quando serve, coi valori di quel momento ----
-static void TipsLayout(HWND hwnd)
+// ---- le zone del pannello: una per ogni cosa che ha qualcosa da spiegare (un tooltip) o un menu ----
+static void RegionsLayout(HWND hwnd)
 {
-    if (!g_tip) return;
-    for (int i = 0; i < g_nrg; i++) { TTTOOLINFOW ti = { TTTOOLINFOW_V2_SIZE }; ti.hwnd = hwnd; ti.uId = i + 1; SendMessageW(g_tip, TTM_DELTOOLW, 0, (LPARAM)&ti); }
-    RECT rc; GetClientRect(hwnd, &rc); float sc = Scale(hwnd);
-    g_nrg = PanelRegions(g_state, rc.right / sc, g_rg, 48);
-    for (int i = 0; i < g_nrg; i++) {
-        TTTOOLINFOW ti = { TTTOOLINFOW_V2_SIZE }; ti.uFlags = TTF_SUBCLASS; ti.hwnd = hwnd; ti.uId = i + 1; ti.lpszText = LPSTR_TEXTCALLBACKW;
-        SetRect(&ti.rect, (int)(g_rg[i].x * sc), (int)(g_rg[i].y * sc), (int)((g_rg[i].x + g_rg[i].w) * sc), (int)((g_rg[i].y + g_rg[i].h) * sc));
-        SendMessageW(g_tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
-    }
-}
-static void TipsCreate(HWND hwnd)
-{
-    InitCommonControls();
-    g_tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, 0, 0, 0, 0, hwnd, nullptr, g_inst, nullptr);
-    if (!g_tip) return;
-    SendMessageW(g_tip, TTM_SETMAXTIPWIDTH, 0, Px(hwnd, 460)); SendMessageW(g_tip, TTM_SETDELAYTIME, TTDT_AUTOPOP, 30000);
-    SetWindowTheme(g_tip, g_theme->light ? L"Explorer" : L"DarkMode_Explorer", nullptr);
-    TipsLayout(hwnd);
+    RECT rc; GetClientRect(hwnd, &rc);
+    g_nrg = PanelRegions(g_state, rc.right / Scale(hwnd), g_rg, 48);
 }
 static int RegionAt(HWND hwnd, int px, int py)
 {
@@ -263,7 +229,7 @@ static const Program* ProgramOf(int region)
     if (region >= RG_TOPRAM && region < RG_TOPRAM + g_state.nTopRam) return &g_state.topRam[region - RG_TOPRAM];
     return nullptr;
 }
-// il testo di una zona; vuoto = nessun tooltip
+// il testo di una zona, coi valori di adesso; vuoto = nessun tooltip
 static void TipText(int region, Lb& b)
 {
     const State& s = g_state;
@@ -318,6 +284,30 @@ static void TipText(int region, Lb& b)
     }
 }
 
+// ---- tooltip: li disegna Pulse (popups.cpp). Compaiono dopo mezzo secondo di mouse su una zona, o quasi subito se se n'è appena
+// chiuso un altro; restano finché il mouse non lascia la zona, e mentre sono aperti i valori che riportano seguono le letture.
+// Dopo un clic sulla zona non tornano finché il mouse non ne esce ----
+static int g_tipRegion, g_tipMute; static bool g_tipOn; static ULONGLONG g_tipOffAt; static POINT g_tipAt;
+static void TipRefresh()
+{
+    Lb b; TipText(g_tipRegion, b);
+    if (b.n) TipShow(b.s, g_tipAt); else TipHide();
+}
+// la zona sotto il mouse è questa (0 = nessuna), e il mouse è in questo punto dello schermo
+static void TipArm(HWND hwnd, int region, POINT at)
+{
+    if (MenuIsOpen() || region == g_tipMute) region = 0; else g_tipMute = 0;
+    g_tipAt = at;
+    if (region == g_tipRegion) return;
+    if (g_tipOn) { g_tipOn = false; g_tipOffAt = GetTickCount64(); TipHide(); }
+    KillTimer(hwnd, TIMER_TIP); g_tipRegion = region;
+    if (region) SetTimer(hwnd, TIMER_TIP, GetTickCount64() - g_tipOffAt < 400 ? 80 : 500, nullptr);
+}
+static void TipMute(HWND hwnd)                                                        // un clic: via il tooltip, e su questa zona non torna
+{
+    const int region = g_tipRegion; TipArm(hwnd, 0, g_tipAt); g_tipMute = region;
+}
+
 // ---- il menu di un programma: cartella, proprietà, termina, cerca ----
 static bool ProgramPath(DWORD pid, wchar_t* path)
 {
@@ -330,16 +320,14 @@ static void ListedName(const wchar_t* exe, wchar_t* name)
     lstrcpynW(name, exe, PROGNAME); int n = lstrlenW(name);
     if (n > 4 && !lstrcmpiW(name + n - 4, L".exe")) name[n - 4] = 0;
 }
-static void ProgramMenu(HWND hwnd, const Program& p)
+static void ProgramMenu(const Program& p, POINT at)
 {
     g_menuProg = p;
-    HMENU menu = CreatePopupMenu(); Sb end;
+    Menu m; Sb end;
     if (p.count > 1) end.t(L"End all ").i(p.count).t(L" processes"); else end.t(L"End process");
-    AppendMenuW(menu, MF_STRING, ID_P_OPEN, L"Open file location"); AppendMenuW(menu, MF_STRING, ID_P_PROPS, L"Properties");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); AppendMenuW(menu, MF_STRING, ID_P_END, end.s);
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); AppendMenuW(menu, MF_STRING, ID_P_SEARCH, L"Search online");
-    POINT pt; GetCursorPos(&pt);
-    SetForegroundWindow(hwnd); TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr); PostMessageW(hwnd, WM_NULL, 0, 0); DestroyMenu(menu);
+    m.add(MI_ITEM, ID_P_OPEN, L"Open file location").add(MI_ITEM, ID_P_PROPS, L"Properties").add(MI_SEP);
+    m.add(MI_ITEM, ID_P_END, end.s).add(MI_SEP).add(MI_ITEM, ID_P_SEARCH, L"Search online");
+    MenuOpen(m, at);
 }
 // una riga è un programma: la conferma dice quanti processi chiude. Si chiudono quelli che hanno quel nome adesso; per un
 // programma di un processo solo, quel processo e solo se ha ancora quel nome (il numero può essere passato a un altro)
@@ -426,34 +414,23 @@ static void TrayTip(HWND hwnd)
     g_trayTip[0] = 0;
     if (!timeout) TrayRestore(hwnd);
 }
-static void Popup(HWND hwnd, HMENU menu, int x, int y)
-{
-    SetForegroundWindow(hwnd);                                                       // senza, il menu non si chiude cliccando altrove
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON, x, y, 0, hwnd, nullptr);
-    PostMessageW(hwnd, WM_NULL, 0, 0);
-    DestroyMenu(menu);
-}
+// il tema non è un sottomenu: le sue tre voci stanno nel menu, sotto il loro titolo, con la spunta su quella in uso
 static void TrayMenu(HWND hwnd, int x, int y)
 {
-    HMENU menu = CreatePopupMenu(), theme = CreatePopupMenu();
-    AppendMenuW(theme, MF_STRING | (g_set.theme == 0 ? MF_CHECKED : 0), ID_DARK, L"Dark");
-    AppendMenuW(theme, MF_STRING | (g_set.theme == 1 ? MF_CHECKED : 0), ID_LIGHT, L"Light");
-    AppendMenuW(theme, MF_STRING | (g_set.theme == 2 ? MF_CHECKED : 0), ID_FOLLOW, L"Follow Windows");
-    AppendMenuW(menu, MF_STRING, ID_SHOW, IsWindowVisible(hwnd) ? L"Hide" : L"Show");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)theme, L"Theme");
-    AppendMenuW(menu, MF_STRING | (g_set.topmost ? MF_CHECKED : 0), ID_TOPMOST, L"Always on top");
-    AppendMenuW(menu, MF_STRING | (Autostart() ? MF_CHECKED : 0), ID_AUTOSTART, L"Start with Windows");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, ID_EXIT, L"Exit");
-    Popup(hwnd, menu, x, y);
+    Menu m;
+    m.add(MI_ITEM, ID_SHOW, IsWindowVisible(hwnd) ? L"Hide" : L"Show").add(MI_SEP);
+    m.add(MI_HEAD, 0, L"THEME").add(MI_ITEM, ID_DARK, L"Dark", g_set.theme == 0).add(MI_ITEM, ID_LIGHT, L"Light", g_set.theme == 1);
+    m.add(MI_ITEM, ID_FOLLOW, L"Follow Windows", g_set.theme == 2).add(MI_SEP);
+    m.add(MI_ITEM, ID_TOPMOST, L"Always on top", g_set.topmost).add(MI_ITEM, ID_AUTOSTART, L"Start with Windows", Autostart()).add(MI_SEP);
+    m.add(MI_ITEM, ID_EXIT, L"Exit");
+    POINT at = { x, y }; MenuOpen(m, at);
 }
 // la scelta dell'angolo: quattro frecce sotto il bottone, come in Pulse 1.x. Si chiude scegliendo, cliccando altrove, con Esc o
 // quando il mouse lascia il pannello
 static void SetPicker(HWND hwnd, bool open)
 {
     if (g_ui.picker == open) return;
-    g_ui.picker = open; g_ui.hotArrow = -1; InvalidateRect(hwnd, nullptr, FALSE);
+    g_ui.picker = open; g_ui.hotArrow = -1; g_ui.cross = 0; InvalidateRect(hwnd, nullptr, FALSE);
 }
 static void Command(HWND hwnd, int id)
 {
@@ -492,13 +469,17 @@ static int ArrowAt(HWND hwnd, int px, int py)
     for (int k = 0; k < 4; k++) { float cx, cy; PickerCell(W, k, cx, cy); if (x >= cx && x < cx + PICK_CELL && y >= cy && y < cy + PICK_CELL) return k; }
     return -1;
 }
-// che cosa c'è sotto il mouse: un bottone, una freccia, una riga di programma. Si ridisegna solo se cambia
-static void SetHover(HWND hwnd, int button, int region, int arrow)
+// che cosa c'è sotto il mouse: un bottone, una freccia, una riga di programma, un secondo dei grafici (cross: la sua posizione nel
+// minuto + 1, 0 nessuno). Si ridisegna solo se cambia
+static void SetHover(HWND hwnd, int button, int region, int arrow, int cross)
 {
+    if (MenuIsOpen()) return;                                                        // finché il suo menu è aperto, la riga del programma resta evidenziata
     if (region < RG_TOPCPU || !ProgramOf(region) || arrow >= 0) region = 0;         // si evidenziano solo le righe che hanno un programma
-    if (button == g_ui.hot && region == g_ui.hotRegion && arrow == g_ui.hotArrow) return;
-    g_ui.hot = button; g_ui.hotRegion = region; g_ui.hotArrow = arrow; InvalidateRect(hwnd, nullptr, FALSE);
+    if (arrow >= 0 || g_ui.picker) cross = 0;                                        // la scelta dell'angolo sta sopra i grafici
+    if (button == g_ui.hot && region == g_ui.hotRegion && arrow == g_ui.hotArrow && cross == g_ui.cross) return;
+    g_ui.hot = button; g_ui.hotRegion = region; g_ui.hotArrow = arrow; g_ui.cross = cross; InvalidateRect(hwnd, nullptr, FALSE);
 }
+static void NoHover(HWND hwnd) { SetHover(hwnd, -1, 0, -1, 0); TipArm(hwnd, 0, g_tipAt); }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -514,7 +495,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return HTCLIENT; }
     case WM_NCLBUTTONDBLCLK: return 0;                                              // il doppio clic sulla testata non ingrandisce niente
     case WM_NCRBUTTONUP: return 0;
-    case WM_NCMOUSEMOVE: SetHover(hwnd, -1, 0, -1); break;
+    case WM_NCMOUSEMOVE: NoHover(hwnd); break;
+    case WM_SHOWWINDOW: if (!wp) NoHover(hwnd); break;                             // nascosto nel tray: niente resta acceso
+    case WM_MENU_CLOSED: SetHover(hwnd, -1, 0, -1, 0); return 0;                    // il prossimo movimento del mouse dirà che cosa c'è sotto
     case WM_GETMINMAXINFO: {
         MINMAXINFO* m = (MINMAXINFO*)lp; int h = Px(hwnd, PanelHeight(g_state));
         m->ptMinTrackSize.x = Px(hwnd, MinWidth()); m->ptMaxTrackSize.x = Px(hwnd, 1600); m->ptMinTrackSize.y = m->ptMaxTrackSize.y = h;
@@ -537,27 +520,26 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return TRUE;
     case WM_ERASEBKGND: return 1;
     case WM_TIMER: {
+        if (wp == TIMER_TIP) {                                                      // il mouse è rimasto sulla zona: il suo tooltip
+            KillTimer(hwnd, TIMER_TIP);
+            if (g_tipRegion && !MenuIsOpen()) { g_tipOn = true; TipRefresh(); }
+            return 0;
+        }
         MetricsTick(g_state); SlowCopy(g_state); SensorsExchange(g_state); FitHeight(hwnd);
-        static ULONGLONG minute; if (g_state.uptimeSec / 60 != minute) { minute = g_state.uptimeSec / 60; TipsLayout(hwnd); }   // la riga della testata si allunga coi minuti
+        static ULONGLONG minute; if (g_state.uptimeSec / 60 != minute) { minute = g_state.uptimeSec / 60; RegionsLayout(hwnd); }   // la riga della testata si allunga coi minuti
         // nascosto nel tray, a schermo bloccato o spento legge, così il minuto è pronto quando torna, ma non disegna
         if (IsWindowVisible(hwnd) && !g_locked && !g_displayOff) InvalidateRect(hwnd, nullptr, FALSE);
+        if (g_tipOn) TipRefresh();                                                  // un tooltip aperto segue le letture
         if (g_ticks++ % 5 == 0) TrayTip(hwnd);
         if (g_seconds && g_ticks >= (unsigned)g_seconds) DestroyWindow(hwnd);
         return 0; }
     case WM_SIZE:
-        if (wp != SIZE_MINIMIZED && LOWORD(lp)) { g_set.width = (int)(LOWORD(lp) / Scale(hwnd) + .5f); DrawResize(hwnd); TipsLayout(hwnd); InvalidateRect(hwnd, nullptr, FALSE); }
+        if (wp != SIZE_MINIMIZED && LOWORD(lp)) { g_set.width = (int)(LOWORD(lp) / Scale(hwnd) + .5f); DrawResize(hwnd); RegionsLayout(hwnd); InvalidateRect(hwnd, nullptr, FALSE); }
         return 0;
-    case WM_NOTIFY: {
-        NMHDR* nh = (NMHDR*)lp;
-        if (nh->hwndFrom == g_tip && nh->code == TTN_GETDISPINFOW) {
-            NMTTDISPINFOW* di = (NMTTDISPINFOW*)lp; int i = (int)di->hdr.idFrom - 1; Lb b;
-            if (i >= 0 && i < g_nrg) TipText(g_rg[i].id, b);
-            lstrcpynW(g_tipText, b.s, 1100); di->lpszText = g_tipText;
-        }
+    case WM_RBUTTONUP: {                                                            // tasto destro su una riga di Top CPU o Top RAM: il suo menu, lì
+        POINT at = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        if (const Program* p = ProgramOf(RegionAt(hwnd, at.x, at.y))) { TipMute(hwnd); ClientToScreen(hwnd, &at); ProgramMenu(*p, at); }
         return 0; }
-    case WM_RBUTTONUP:                                                              // tasto destro su una riga di Top CPU o Top RAM
-        if (const Program* p = ProgramOf(RegionAt(hwnd, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)))) ProgramMenu(hwnd, *p);
-        return 0;
     case WM_EXITSIZEMOVE: SettingsSave(); return 0;
     case WM_DPICHANGED: {
         const RECT* r = (const RECT*)lp;
@@ -571,13 +553,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0; }
     case WM_MOUSEMOVE:
         if (!g_tracking) { TRACKMOUSEEVENT t = { sizeof(t), TME_LEAVE, hwnd, 0 }; g_tracking = TrackMouseEvent(&t) != 0; }
-        { int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp); SetHover(hwnd, ButtonAt(hwnd, x, y), RegionAt(hwnd, x, y), ArrowAt(hwnd, x, y)); }
+        {
+            const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp), arrow = ArrowAt(hwnd, x, y), region = arrow >= 0 ? 0 : RegionAt(hwnd, x, y);
+            RECT rc; GetClientRect(hwnd, &rc); const float sc = Scale(hwnd);
+            SetHover(hwnd, ButtonAt(hwnd, x, y), region, arrow, GraphSecondAt(g_state, rc.right / sc, x / sc, y / sc) + 1);
+            POINT at = { x, y }; ClientToScreen(hwnd, &at); TipArm(hwnd, region, at);
+        }
         return 0;
-    case WM_MOUSELEAVE: g_tracking = false; SetHover(hwnd, -1, 0, -1); if (GetCapture() != hwnd) SetPicker(hwnd, false); return 0;
+    case WM_MOUSELEAVE: g_tracking = false; NoHover(hwnd); if (GetCapture() != hwnd) SetPicker(hwnd, false); return 0;
     case WM_KEYDOWN: if (wp == VK_ESCAPE) SetPicker(hwnd, false); return 0;
     case WM_ACTIVATE: if (LOWORD(wp) == WA_INACTIVE) SetPicker(hwnd, false); break;
     case WM_LBUTTONDOWN: {
         int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+        TipMute(hwnd);
         g_pressedArrow = ArrowAt(hwnd, x, y); g_pressed = g_pressedArrow >= 0 ? -1 : ButtonAt(hwnd, x, y);
         if (g_ui.picker && g_pressedArrow < 0 && g_pressed != BTN_CORNER) SetPicker(hwnd, false);   // un clic altrove chiude la scelta dell'angolo
         if (g_pressed >= 0 || g_pressedArrow >= 0) SetCapture(hwnd);
@@ -665,6 +653,7 @@ static int Shot(const wchar_t* arg)
     SelectObject(dc, bmp);
     Ui ui = { -1, true, 0, false, -1 };
     if (g_demoUi) { ui.hot = BTN_FIT; ui.hotRegion = RG_TOPCPU + 1; ui.picker = true; ui.hotArrow = 1; }
+    if (g_shotAgo >= 0 && g_shotAgo < HIST) ui.cross = HIST - g_shotAgo;
     bool ok = DrawToDc(dc, w, h, (float)g_shotDpi, g_state, ui);
     GdiFlush();
     if (!ok) return 3;
@@ -745,6 +734,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
     if (const wchar_t* p = Find(cmd, L"--theme")) { p = SkipSp(p); g_set.theme = *p == L'l' ? 1 : 0; }
     if (const wchar_t* p = Find(cmd, L"--seconds")) g_seconds = ReadInt(p);
     if (const wchar_t* p = Find(cmd, L"--dpi")) { g_shotDpi = ReadInt(p); if (g_shotDpi < 96 || g_shotDpi > 384) g_shotDpi = 96; }
+    if (const wchar_t* p = Find(cmd, L"--ago")) g_shotAgo = ReadInt(p);
     ApplyTheme();
     if (const wchar_t* p = Find(cmd, L"--shot")) return Shot(p);
     if (const wchar_t* p = Find(cmd, L"--dump")) return Dump(p);
@@ -776,7 +766,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
     // senza di lei l'annuncio della shell (che elevata non è) verrebbe fermato prima di arrivare. Si apre solo a questo messaggio,
     // che non porta dati: non ai comandi, che arrivano dal nostro stesso menu
     ChangeWindowMessageFilterEx(hwnd, g_msgTaskbar, MSGFLT_ALLOW, nullptr);
-    TrayAdd(hwnd); TipsCreate(hwnd);
+    TrayAdd(hwnd); PopupsInit(inst, hwnd); RegionsLayout(hwnd);
     WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION); RegisterPowerSettingNotification(hwnd, &kDisplayState, DEVICE_NOTIFY_WINDOW_HANDLE);
     if (g_set.visible) {
         ShowWindow(hwnd, g_noact ? SW_SHOWNOACTIVATE : SW_SHOW);
@@ -784,7 +774,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
     }
     { char line[96]; wsprintfA(line, "start first_frame_ms=%d pid=%u", MsSinceProcessStart(), GetCurrentProcessId()); LogLine(line); }
     if (const wchar_t* p = Find(cmd, L"--bench")) { int n = ReadInt(p); Bench(hwnd, n > 0 ? n : 300); DestroyWindow(hwnd); return 0; }
-    SetCoalescableTimer(hwnd, 1, 1000, nullptr, 100);                               // Windows può accorparlo ad altri risvegli entro un decimo di secondo
+    SetCoalescableTimer(hwnd, TIMER_TICK, 1000, nullptr, 100);                      // Windows può accorparlo ad altri risvegli entro un decimo di secondo
 
     MSG m;
     while (GetMessageW(&m, nullptr, 0, 0) > 0) { TranslateMessage(&m); DispatchMessageW(&m); }

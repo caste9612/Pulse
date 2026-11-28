@@ -18,14 +18,22 @@ programs instead of processes) with Direct2D rendered by the CPU, on an opaque b
     ping, adapter and local address (when Windows reports a change and once a minute), drives every 30 s, the public
     address every ten minutes.
 - **Five graphs, one style**: the same curve, line width, fade and dot on the latest value for CPU, memory, GPU,
-  network and disk. The curve passes through the readings and between two of them never goes above the higher or
-  below the lower, so a spike looks as high as it was. Network and disk are mirrored, in above the axis and out below
-  it; with nothing passing the two lines lie on the axis as one. (Pulse 1.4 draws these two with straight lines and
-  a flat fill.)
+  network and disk, each as long as the bars under it and each with its scale written in the corner (`100` for the
+  three percentages, a round rate for network and disk). The curve passes through the readings and between two of
+  them never goes above the higher or below the lower, so a spike looks as high as it was. Network and disk are
+  mirrored, in above the axis and out below it; with nothing passing the two lines lie on the axis as one. (Pulse 1.4
+  draws these two with straight lines and a flat fill.)
+- **Five rows, one box**: behind each value the level of now, in a box of the same width for all five metrics, full
+  only on its edge line. The highest value of the last minute is that line going on, fainter, from now up to it; when
+  now is the highest there is nothing to add. Network and disk have two levels, in on the top edge and out on the
+  bottom one.
+- **Reading a past second**: with the mouse on a graph, a line on all five marks that second, with its values next to
+  it (load and temperature, in and out) and how many seconds ago it was on the ruler.
+- **Drives**: one row each, with a grey bar that turns red from 80% full.
 - **The window**: no frame, dragged by its header, resized from its left and right edges; its height is always the
   content's. Dragged near an edge of the screen's work area it stops 12 units from it. Header buttons: fit, corner
   (four arrows open under it, one per corner of the screen), always on top, hide. Light and dark theme, or the one
-  Windows uses; menus and tooltips follow it.
+  Windows uses.
 - **Tray icon** with its menu (show or hide, theme, always on top, start with Windows, exit) and the three loads in
   its tooltip, **settings** in `%APPDATA%\Pulse2\settings.txt`, a **single instance**. If the shell loses the icon
   (it restarted, was not ready at startup, or a third-party bar hooked the tray later), Pulse 2 puts it back: at once
@@ -35,6 +43,10 @@ programs instead of processes) with Direct2D rendered by the CPU, on an opaque b
 - **Tooltips** for the cores, the memory, the GPU, the power estimate, the header buttons and each program row, and the
   **menu of a program** (open file location, properties, end, search online). *End* closes every process of the
   program, after a confirmation that says how many.
+- **Tooltips and menus drawn by Pulse 2**, with the panel's fonts, colours and border instead of the system's. A
+  tooltip appears after half a second on its zone, follows the readings while it is open and lets the mouse through;
+  a menu takes the arrow keys, Enter and Esc and closes at a click elsewhere. What Windows did by itself is lost:
+  screen readers do not read them.
 
 ## The sensors process
 
@@ -68,8 +80,7 @@ Checked on the reference PC on 27/11/2026, next to the installed Pulse:
 - GPUs other than NVIDIA, the Wi-Fi name and signal, the SSD temperature.
 - The watch on display driver changes. A crashing NVML call is caught (`__try`) and turns the GPU readings off until
   the next start, instead of taking the process down.
-- The accent, transparency and density of Pulse 1.x's *Appearance* window. Menus and tooltips are the system's own,
-  dark or light with the theme, not drawn in the panel's style.
+- The accent, transparency and density of Pulse 1.x's *Appearance* window.
 - Vertical scrolling: the window is as high as its content, so on a short screen the bottom is cut.
 - An installer, and the passage of the settings from Pulse 1.x.
 
@@ -83,7 +94,7 @@ Checked on the reference PC on 27/11/2026, next to the installed Pulse:
 | `--theme dark\|light` | theme, instead of the saved one |
 | `--nosave` | a test copy: reads and writes no settings, no single instance |
 | `--noactivate`, `--seconds <n>` | don't take the focus; close after n seconds |
-| `--shot <file.bmp>` | read for a second, render one frame off screen, save it and exit; `--demo-ui` adds a hovered row and the open corner arrows, `--demo-data` uses the made-up data of `--bench`, `--dpi <n>` another scale (144 is 150%) |
+| `--shot <file.bmp>` | read for a second, render one frame off screen, save it and exit; `--demo-ui` adds a hovered row and the open corner arrows, `--demo-data` uses the made-up data of `--bench`, `--ago <n>` adds the reading of n seconds ago, `--dpi <n>` another scale (144 is 150%) |
 | `--bench <n>` | draw n frames in a row with the same made-up data and log the CPU each one cost |
 | `--dump <file.txt>` | read for a second and write the readings, the regions and their tooltips as text |
 

@@ -162,8 +162,9 @@ enum { PANEL_W = 514, HEADER_H = 32, BTN_W = 28, NBTN = 4 };                    
 enum { BTN_FIT, BTN_CORNER, BTN_PIN, BTN_HIDE };                                     // i quattro bottoni della testata, da sinistra
 inline float BtnX(float panelW, int k) { return panelW - 4 - BTN_W * NBTN + k * BTN_W; }
 // quello che il mouse sta facendo: il bottone della testata sotto il mouse (-1 nessuno), la riga di Top CPU o Top RAM sotto il mouse
-// (il suo RG_, 0 nessuna), la scelta dell'angolo aperta e la sua freccia sotto il mouse (-1 nessuna)
-struct Ui { int hot; bool pinned; int hotRegion; bool picker; int hotArrow; };
+// (il suo RG_, 0 nessuna), la scelta dell'angolo aperta e la sua freccia sotto il mouse (-1 nessuna), il secondo dei grafici sotto
+// il mouse (la sua posizione nel minuto + 1, 0 nessuno)
+struct Ui { int hot; bool pinned; int hotRegion; bool picker; int hotArrow; int cross; };
 // la scelta dell'angolo: una tessera di due caselle per due sotto il bottone, 0 alto sx, 1 alto dx, 2 basso sx, 3 basso dx
 enum { PICK_CELL = 28, PICK_PAD = 4 };
 inline float PickerX(float panelW)
@@ -178,8 +179,34 @@ enum { RG_POWER = 1, RG_CPU_TEMP, RG_CORES, RG_RAM, RG_GPU, RG_BTN = 10, RG_TOPC
 struct Region { int id; float x, y, w, h; };
 int PanelRegions(const State& s, float W, Region* out, int cap);
 float PanelFitWidth(const State& s);                                                 // la larghezza più stretta in cui niente è tagliato
+int GraphSecondAt(const State& s, float W, float x, float y);                        // il secondo (0..HIST-1) del grafico sotto un punto, -1 se lì non c'è un grafico
 bool DrawCreate(HWND hwnd);
 void DrawResize(HWND hwnd);
 void DrawThemeChanged();                                                             // il tema è cambiato: si rifanno letto puntinato e sfumature
 void DrawPaint(HWND hwnd, const State& s, const Ui& ui);
 bool DrawToDc(HDC memdc, int w, int h, float dpi, const State& s, const Ui& ui);     // una resa fuori schermo, senza finestra; w e h in pixel
+
+// ---- tooltip e menu: due finestrelle disegnate da Pulse con i caratteri e il bordo del pannello (popups.cpp; il disegno è in draw.cpp) ----
+enum { WM_TRAY = WM_APP + 1, WM_MENU_CLOSED };                                       // i messaggi privati della finestra del pannello
+enum { MI_ITEM, MI_SEP, MI_HEAD };                                                   // una voce, una riga di separazione, un titolo che non si sceglie
+struct MenuItem { int kind, id; bool checked; wchar_t text[40]; };
+struct Menu {
+    MenuItem it[16]; int n, hot;                                                     // hot: la voce sotto il mouse o raggiunta coi tasti, -1 nessuna
+    Menu() : n(0), hot(-1) {}
+    Menu& add(int kind, int id = 0, const wchar_t* text = L"", bool checked = false)
+    {
+        if (n < 16) { MenuItem& m = it[n++]; m.kind = kind; m.id = id; m.checked = checked; lstrcpynW(m.text, text, 40); }
+        return *this;
+    }
+};
+void TipSize(const wchar_t* text, float& w, float& h);                               // in unità; 0 se non c'è niente da scrivere
+void TipPaint(HDC dc, int wpx, int hpx, float dpi, const wchar_t* text);
+void MenuSize(const Menu& m, float& w, float& h);
+int MenuItemAt(const Menu& m, float y);                                              // la voce a quell'altezza (in unità), -1 se lì non c'è una voce che si sceglie
+void MenuPaint(HDC dc, int wpx, int hpx, float dpi, const Menu& m);
+void PopupsInit(HINSTANCE inst, HWND panel);
+void TipShow(const wchar_t* text, POINT at);                                         // sotto quel punto dello schermo; se è già aperto resta dov'è e cambia solo il testo
+void TipHide();
+void MenuOpen(const Menu& m, POINT at);                                              // la voce scelta arriva al pannello come WM_COMMAND; alla chiusura, WM_MENU_CLOSED
+bool MenuIsOpen();
+void PopupsRedraw();                                                                 // il tema è cambiato
