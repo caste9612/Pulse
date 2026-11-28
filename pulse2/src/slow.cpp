@@ -121,7 +121,8 @@ static void ReadPrograms(SlowData& d)
 // ---------------------------------------------------------------------------------------------------------------------------
 // GPU NVIDIA: la libreria del driver (NVML), caricata solo dalla cartella di sistema. Dopo un aggiornamento del driver una chiamata
 // con la vecchia libreria può far cadere il processo (successo a Pulse 1.2 il 10/10/2026): qui ogni lettura sta in un __try, e al
-// primo guasto NVML si lascia stare fino al riavvio.
+// primo guasto NVML si lascia stare fino al riavvio. E quando Windows avvisa che un adattatore video è cambiato (SlowGpuOff, da un
+// altro thread) non la si chiama più: il pannello sta per ripartire.
 // ---------------------------------------------------------------------------------------------------------------------------
 struct NvUtil { unsigned gpu, memory; };
 struct NvMem { unsigned long long total, free, used; };
@@ -167,8 +168,11 @@ static bool NvReadUnsafe(SlowData& d)
     d.gpuMemClock = g_nv.clock && g_nv.clock(g_nv.dev, 2, &v) == 0 ? (float)v : 0;
     return true;
 }
+static volatile LONG g_gpuOff;
+void SlowGpuOff() { InterlockedExchange(&g_gpuOff, 1); }
 static void ReadGpu(SlowData& d)
 {
+    if (g_gpuOff) g_nv.dead = true;
     if (!g_nv.tried && GetEnvironmentVariableW(L"PULSE_NO_NVML", nullptr, 0)) g_nv.dead = true;   // come in Pulse 1.x: per provare senza NVML
     if (g_nv.dead) { d.gpuOk = false; return; }
     bool ok = false;

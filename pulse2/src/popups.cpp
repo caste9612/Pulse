@@ -1,14 +1,15 @@
-// Pulse 2: tooltip e menu. Sono due finestrelle del pannello, disegnate con i suoi caratteri e il suo bordo (draw.cpp) al posto di
-// quelle di Windows.
+// Pulse 2: tooltip, menu e la finestra Aspetto. Tooltip e menu sono due finestrelle del pannello, disegnate con i suoi caratteri e
+// il suo bordo (draw.cpp) al posto di quelle di Windows.
 //
 // Il tooltip non prende mai il fuoco e il mouse gli passa attraverso: è solo un'immagine vicino al puntatore. Il menu invece prende
 // il primo piano, perché gli servono i tasti (frecce, Invio, Esc) e perché così Windows gli dice quando si clicca altrove; se il primo
 // piano non gli viene dato, un controllo a tempo lo chiude lo stesso al primo clic fuori.
 #include "app.h"
 #include <windowsx.h>
+#include <dwmapi.h>
 
 static HINSTANCE g_inst;
-static HWND g_panel, g_tip, g_menuWnd;
+static HWND g_panel, g_tip, g_menuWnd, g_apWnd;
 static wchar_t g_tipText[1100];
 static Menu g_menu; static bool g_menuTracking;
 
@@ -145,12 +146,73 @@ void MenuOpen(const Menu& m, POINT at)
 }
 bool MenuIsOpen() { return g_menuWnd != nullptr; }
 
+// ---- la finestra Aspetto: una finestra vera, con la barra del titolo di Windows; dentro, le scelte disegnate da Pulse. Un clic
+// su una scelta la manda al pannello, che la applica e la salva; da lì si rilegge che cosa è in uso ----
+static int g_apHot = -1; static bool g_apTracking;
+static const int kApCommand[AP_GROUPS] = { ID_ACCENT, ID_DARK, ID_OPACITY, ID_DENSITY };
+static int ApUnder(HWND hwnd, LPARAM lp)
+{
+    const float sc = 96.f / GetDpiForWindow(hwnd); return AppearanceAt(GET_X_LPARAM(lp) * sc, GET_Y_LPARAM(lp) * sc);
+}
+static void ApTitleBar(HWND hwnd)                                                     // scura col tema scuro
+{
+    BOOL dark = !g_theme->light; DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
+}
+static LRESULT CALLBACK ApProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_ERASEBKGND: return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps; BeginPaint(hwnd, &ps); RECT rc; GetClientRect(hwnd, &rc);
+        Appearance a; AppearanceGet(a); a.hot = g_apHot;
+        AppearancePaint(ps.hdc, rc.right, rc.bottom, (float)GetDpiForWindow(hwnd), a);
+        EndPaint(hwnd, &ps);
+        return 0; }
+    case WM_MOUSEMOVE: {
+        if (!g_apTracking) { TRACKMOUSEEVENT t = { sizeof(t), TME_LEAVE, hwnd, 0 }; g_apTracking = TrackMouseEvent(&t) != 0; }
+        const int k = ApUnder(hwnd, lp);
+        if (k != g_apHot) { g_apHot = k; InvalidateRect(hwnd, nullptr, FALSE); }
+        return 0; }
+    case WM_MOUSELEAVE:
+        g_apTracking = false;
+        if (g_apHot != -1) { g_apHot = -1; InvalidateRect(hwnd, nullptr, FALSE); }
+        return 0;
+    case WM_LBUTTONUP: {
+        const int k = ApUnder(hwnd, lp);
+        if (k >= 0) { SendMessageW(g_panel, WM_COMMAND, (WPARAM)(kApCommand[k >> 4] + (k & 15)), 0); InvalidateRect(hwnd, nullptr, FALSE); }
+        return 0; }
+    case WM_KEYDOWN: if (wp == VK_ESCAPE) DestroyWindow(hwnd); return 0;
+    case WM_DPICHANGED: {
+        const RECT* r = (const RECT*)lp;
+        SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
+        return 0; }
+    case WM_DESTROY: g_apWnd = nullptr; g_apHot = -1; g_apTracking = false; return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+// al centro dello schermo su cui sta il pannello, e in primo piano come lui: mentre si provano le scelte deve restare visibile
+void AppearanceOpen()
+{
+    if (g_apWnd) { SetForegroundWindow(g_apWnd); return; }
+    const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, ex = WS_EX_TOPMOST;
+    RECT pr; GetWindowRect(g_panel, &pr); POINT c = { (pr.left + pr.right) / 2, (pr.top + pr.bottom) / 2 }; const RECT work = WorkAt(c);
+    HWND w = CreateWindowExW(ex, L"Pulse2Appearance", L"Appearance \x00B7 Pulse 2", style, work.left, work.top, 200, 200, nullptr, nullptr, g_inst, nullptr);
+    if (!w) return;
+    const UINT dpi = GetDpiForWindow(w); float fw = 0, fh = 0; AppearanceSize(fw, fh);
+    RECT rc = { 0, 0, (int)ceilf(fw * dpi / 96), (int)ceilf(fh * dpi / 96) }; AdjustWindowRectExForDpi(&rc, style, FALSE, ex, dpi);
+    const int ww = rc.right - rc.left, wh = rc.bottom - rc.top;
+    SetWindowPos(w, nullptr, (work.left + work.right - ww) / 2, (work.top + work.bottom - wh) / 2, ww, wh, SWP_NOZORDER | SWP_NOACTIVATE);
+    ApTitleBar(w);
+    g_apWnd = w; ShowWindow(w, SW_SHOW); SetForegroundWindow(w);
+}
+
 void PopupsInit(HINSTANCE inst, HWND panel)
 {
     g_inst = inst; g_panel = panel;
     WNDCLASSEXW wc = { sizeof(wc) }; wc.hInstance = inst; wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpfnWndProc = TipProc; wc.lpszClassName = L"Pulse2Tip"; RegisterClassExW(&wc);
     wc.lpfnWndProc = MenuProc; wc.lpszClassName = L"Pulse2Menu"; RegisterClassExW(&wc);
+    wc.lpfnWndProc = ApProc; wc.lpszClassName = L"Pulse2Appearance"; wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(1)); RegisterClassExW(&wc);
     // a strati e trasparente al mouse: i clic e i movimenti arrivano a quello che c'è sotto, di chiunque sia
     g_tip = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT, L"Pulse2Tip", nullptr, WS_POPUP,
                             0, 0, 1, 1, panel, nullptr, inst, nullptr);
@@ -160,4 +222,5 @@ void PopupsRedraw()
 {
     if (g_tip) InvalidateRect(g_tip, nullptr, FALSE);
     if (g_menuWnd) InvalidateRect(g_menuWnd, nullptr, FALSE);
+    if (g_apWnd) { ApTitleBar(g_apWnd); InvalidateRect(g_apWnd, nullptr, FALSE); }
 }

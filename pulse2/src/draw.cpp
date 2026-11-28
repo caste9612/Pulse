@@ -31,12 +31,14 @@ static ID2D1LinearGradientBrush* g_grad[5];  // CPU, RAM, GPU: dall'alto in bass
 // le parti fisse, già disegnate: valgono per una larghezza, un'altezza e un tema
 static ID2D1Bitmap* g_static; static float g_staticW, g_staticH; static const Theme* g_staticTheme;
 
-// scuro: quello di sempre. Chiaro: i colori di Pulse 1.4 col tema chiaro di Reticle, presi dalla sua finestra
-const Theme kDark = { 0x121518, 0x191d21, 0x2c3338, 0x1d2226, 0x2b3237, 0xe9edee, 0xaab3b8, 0x6c7780, 0x3ddc84,
+// scuro: quello di sempre. Chiaro: i colori di Pulse 1.4 col tema chiaro di Reticle, presi dalla sua finestra. Non sono costanti
+// per un colore solo: l'accento, che si sceglie dalla finestra Aspetto (DrawSetAccent)
+Theme g_dark = { 0x121518, 0x191d21, 0x2c3338, 0x1d2226, 0x2b3237, 0xe9edee, 0xaab3b8, 0x6c7780, 0x3ddc84,
                       0x4cc2ff, 0xb987f7, 0x3ddc84, 0xf5c84b, 0xff5a52, 0xff8a1f, 0xff6eb4, 0xb8e55c, 0x8c9eff, .07f, false };
-const Theme kLight = { 0xe7e6e1, 0xd5d4cf, 0xbdbcb8, 0xd5d4cf, 0xcfcfca, 0x14161a, 0x50555d, 0x8a8f97, 0x008f67,
+Theme g_light = { 0xe7e6e1, 0xd5d4cf, 0xbdbcb8, 0xd5d4cf, 0xcfcfca, 0x14161a, 0x50555d, 0x8a8f97, 0x008f67,
                        0x0a8fc7, 0x7c3aed, 0x1b9e5a, 0xc9a000, 0xd62828, 0xc2410c, 0xc2185b, 0x5b8c00, 0x3949ab, .10f, true };
-const Theme* g_theme = &kDark;
+const Theme* g_theme = &g_dark;
+static int g_density;                    // 0 compatta, 1 comoda: più aria tra le metriche e righe più alte negli elenchi; il testo non cambia misura
 
 static D2D1_COLOR_F Col(unsigned rgb, float a = 1) { return D2D1::ColorF(rgb, a); }
 static void Smooth(bool on) { g_rt->SetAntialiasMode(on ? D2D1_ANTIALIAS_MODE_PER_PRIMITIVE : D2D1_ANTIALIAS_MODE_ALIASED); }
@@ -114,6 +116,46 @@ static bool ResCreate(ID2D1RenderTarget* rt)
     }
     return true;
 }
+
+// ---- l'accento e la densità: quello che si sceglie dalla finestra Aspetto ----
+static float Lin(float v) { v /= 255; return v <= .03928f ? v / 12.92f : powf((v + .055f) / 1.055f, 2.4f); }
+static float Luminance(unsigned rgb)
+{
+    return .2126f * Lin((float)(rgb >> 16 & 255)) + .7152f * Lin((float)(rgb >> 8 & 255)) + .0722f * Lin((float)(rgb & 255));
+}
+static float Contrast(unsigned a, unsigned b)
+{
+    const float x = Luminance(a), y = Luminance(b); return ((x > y ? x : y) + .05f) / ((x < y ? x : y) + .05f);
+}
+// la stessa tinta, più scura di `step` (luminosità HSL, da 0 a 1)
+static unsigned Darker(unsigned rgb, float step)
+{
+    const float r = (rgb >> 16 & 255) / 255.f, g = (rgb >> 8 & 255) / 255.f, b = (rgb & 255) / 255.f;
+    const float mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b), d = mx - mn;
+    float l = (mx + mn) / 2, h = 0, s = 0;                                          // h in sesti di giro
+    if (d > 0) {
+        s = l > .5f ? d / (2 - mx - mn) : d / (mx + mn);
+        h = mx == r ? (g - b) / d + (g < b ? 6 : 0) : mx == g ? (b - r) / d + 2 : (r - g) / d + 4;
+    }
+    l = Clampf(l - step, 0, 1);
+    const float a = s * (l < 1 - l ? l : 1 - l); static const float n[3] = { 0, 8, 4 };
+    unsigned out = 0;
+    for (int i = 0; i < 3; i++) {
+        const float k = fmodf(n[i] + h * 2, 12), t = Clampf(k - 3 < 9 - k ? k - 3 : 9 - k, -1, 1);
+        out = out << 8 | (unsigned)(255 * Clampf(l - a * t, 0, 1) + .5f);
+    }
+    return out;
+}
+// Nel tema scuro l'accento si usa com'è; nel chiaro si scurisce a passi finché stacca abbastanza dal fondo (contrasto 3): la regola
+// di Reticle. Il logo sta tra le parti fisse, che vanno rifatte
+void DrawSetAccent(unsigned dark, unsigned lightBase)
+{
+    unsigned c = lightBase;
+    for (int i = 0; i < 12 && Contrast(c, 0xf2f1ed) < 3; i++) c = Darker(c, .04f);
+    g_dark.accent = dark; g_light.accent = c;
+    Rel(g_static);
+}
+void DrawSetDensity(int density) { g_density = density ? 1 : 0; Rel(g_static); }
 
 // ---- testi ----
 // Un testo composto (carattere, stringa, larghezza massima) si tiene finché serve: comporlo costa più che disegnarlo. Le voci che
@@ -380,25 +422,24 @@ static void RowPair(float y, const wchar_t* lab, unsigned col, const wchar_t* a,
     Arrow(F_C15, 46, yb, false, C_TEXT); Text(F_C15, xr, yb, b, C_TEXT, true);
 }
 // Top CPU o Top RAM: un programma per riga, col numero dei suoi processi; dietro la riga il peso come istogramma. La cornice e la
-// legenda stanno tra le parti fisse (TopFrame)
-enum { TOP_H = 11 + NTOP * 17 + 7 + 2 };
-static void TopFrame(float x, float y, float w, const wchar_t* legend)
+// legenda stanno tra le parti fisse (LegendFrame). rh è l'altezza di una riga
+static void LegendFrame(float x, float y, float w, float h, const wchar_t* legend)
 {
-    Frame(x, y, w, TOP_H, C_LINE);
+    Frame(x, y, w, h, C_LINE);
     float lw = TextW(F_LABEL, legend);                                              // la legenda sta sulla cornice, come nei Panel di Reticle
     R(x + 8, y - 5, lw + 12, 11, C_BG);
     Text(F_LABEL, x + 14, y, legend, C_TEXT);
 }
-static void TopRows(float x, float y, float w, const Program* rows, int n, bool cpu, int hot)
+static void TopRows(float x, float y, float w, float rh, const Program* rows, int n, bool cpu, int hot)
 {
     const unsigned slotCol[3] = { C_P0, C_P1, C_P2 };
     bool swatch = false; for (int i = 0; i < n; i++) if (rows[i].slot >= -1) swatch = true;
     float top = n ? (cpu ? rows[0].cpu : rows[0].ramMb) : 1; if (cpu && top < 4) top = 4; if (top <= 0) top = 1;   // per la CPU la scala arriva almeno al 4 %
     for (int i = 0; i < n; i++) {
         const Program& p = rows[i];
-        float mid = y + 12 + i * 17 + 8.5f, tx = x + 10;
-        if (i == hot) R(x + 4, y + 12 + i * 17, w - 8, 17, C_TEXT, .07f);            // la riga sotto il mouse: ha un tooltip e, col tasto destro, un menu
-        R(x + 10, y + 12 + i * 17 + 1, floorf(Clampf((cpu ? p.cpu : p.ramMb) / top, 0, 1) * (w - 20) + .5f), 15, cpu ? C_CPU : C_RAM, .26f);
+        float ry = y + 12 + i * rh, mid = ry + rh / 2, tx = x + 10;
+        if (i == hot) R(x + 4, ry, w - 8, rh, C_TEXT, .07f);                         // la riga sotto il mouse: ha un tooltip e, col tasto destro, un menu
+        R(x + 10, ry + 1, floorf(Clampf((cpu ? p.cpu : p.ramMb) / top, 0, 1) * (w - 20) + .5f), rh - 2, cpu ? C_CPU : C_RAM, .26f);
         if (swatch) { if (p.slot >= 0 && p.slot < 3) R(tx + 2, mid - 3, 6, 6, slotCol[p.slot]); tx += 12; }
         Sb v; if (cpu) v.f1(p.cpu).c(L'%'); else v.ram(p.ramMb);
         float vw = Text(F_MONO, x + w - 12, mid, v.s, C_TEXT2, true);
@@ -421,15 +462,18 @@ static void Uptime(Sb& b, ULONGLONG sec)
 }
 
 // ---- le misure del pannello: una sola definizione per disegno, parti fisse, zone e larghezza minima ----
-struct Layout { float X, GX, GW, RW, yCpu, yRam, yGpu, yNet, yDsk, yDrives, yTop, tw; };
+// air: l'aria in più tra una metrica e la successiva; rowH: l'altezza di una riga negli elenchi (dischi, programmi); topH: quella
+// del riquadro di Top CPU e Top RAM. Con la densità comoda crescono, il testo no
+struct Layout { float X, GX, GW, RW, yCpu, yRam, yGpu, yNet, yDsk, yDrives, yTop, tw, air, rowH, topH; };
 static Layout Lay(float W, int ndrive)
 {
     Layout l; l.X = 12; l.GX = 192; l.GW = W - l.GX - 12; l.RW = W - 24;
-    l.yCpu = 36; l.yRam = l.yCpu + 63; l.yGpu = l.yRam + 63; l.yNet = l.yGpu + 63; l.yDsk = l.yNet + 65;
-    l.yDrives = l.yDsk + 56; l.yTop = l.yDrives + (float)ndrive * 17 + 12; l.tw = floorf((l.RW - 12) / 2);
+    l.air = g_density ? 6.f : 0.f; l.rowH = g_density ? 20.f : 17.f; l.topH = 11 + NTOP * l.rowH + 7 + 2;
+    l.yCpu = 36 + l.air / 2; l.yRam = l.yCpu + 63 + l.air; l.yGpu = l.yRam + 63 + l.air; l.yNet = l.yGpu + 63 + l.air; l.yDsk = l.yNet + 65 + l.air;
+    l.yDrives = l.yDsk + 56 + l.air; l.yTop = l.yDrives + (float)ndrive * l.rowH + 12 + l.air; l.tw = floorf((l.RW - 12) / 2);
     return l;
 }
-float PanelHeight(const State& s) { return Lay(PANEL_W, s.ndrive).yTop + TOP_H + 12; }
+float PanelHeight(const State& s) { const Layout l = Lay(PANEL_W, s.ndrive); return l.yTop + l.topH + 12; }
 
 // la larghezza più stretta in cui niente è tagliato, con ogni testo che cresce al suo più lungo (99 giorni di uptime, 999 W, due
 // indirizzi pieni): adattare a traffico basso o appena avviati non taglia niente dopo. La colonna del testo ci sta per costruzione
@@ -455,7 +499,7 @@ int PanelRegions(const State& s, float W, Region* out, int cap)
     add(RG_CPU_TEMP, 124, l.yCpu, 60, 32); add(RG_CORES, l.X, l.yCpu + 34, 180, 20); add(RG_CORES, l.GX, l.yCpu + 34, l.GW, 16);
     add(RG_RAM, l.X, l.yRam + 34, 180, 20); add(RG_RAM, l.GX, l.yRam + 34, l.GW, 16);
     add(RG_GPU, 8, l.yGpu, 176, 54); add(RG_GPU, l.GX, l.yGpu + 34, l.GW, 16);
-    for (int i = 0; i < NTOP; i++) { add(RG_TOPCPU + i, l.X + 1, l.yTop + 12 + i * 17, l.tw - 2, 17); add(RG_TOPRAM + i, l.X + l.RW - l.tw + 1, l.yTop + 12 + i * 17, l.tw - 2, 17); }
+    for (int i = 0; i < NTOP; i++) { add(RG_TOPCPU + i, l.X + 1, l.yTop + 12 + i * l.rowH, l.tw - 2, l.rowH); add(RG_TOPRAM + i, l.X + l.RW - l.tw + 1, l.yTop + 12 + i * l.rowH, l.tw - 2, l.rowH); }
     return n;
 }
 
@@ -469,12 +513,12 @@ static void DrawStatic(float W, float H, int ndrive)
     Stroke(kLogoPts, 9, 12, 8, 1.6f, C_ACCENT);
     Text(F_NAME, 36, 16, L"PULSE", C_TEXT);
     const float lanes[5] = { l.yCpu, l.yRam, l.yGpu, l.yNet, l.yDsk };
-    for (int i = 0; i < 5; i++) { Bed(l.GX, lanes[i], l.GW, 32); if (i < 4) R(l.X, lanes[i] + (i < 3 ? 55 : 57), l.RW, 1, C_LINESOFT); }
+    for (int i = 0; i < 5; i++) { Bed(l.GX, lanes[i], l.GW, 32); if (i < 4) R(l.X, lanes[i] + (i < 3 ? 55 : 57) + l.air / 2, l.RW, 1, C_LINESOFT); }
     // il righello del tempo, sotto l'ultimo grafico: vale per tutti e cinque
     const float xw = StepX(l.GW);
     for (int k = 5; k >= 1; k--) { Sb b; b.i(k * 10).t(L" s"); float w = TextW(F_MONO9, b.s); Text(F_MONO9, l.GX + (HIST - 1 - 10 * k) * xw - w / 2, l.yDsk + 43, b.s, C_MUTED); }
     Text(F_MONO9, l.GX + l.GW, l.yDsk + 43, L"now", C_MUTED, true);
-    TopFrame(l.X, l.yTop, l.tw, L"TOP CPU"); TopFrame(l.X + l.RW - l.tw, l.yTop, l.tw, L"TOP RAM");
+    LegendFrame(l.X, l.yTop, l.tw, l.topH, L"TOP CPU"); LegendFrame(l.X + l.RW - l.tw, l.yTop, l.tw, l.topH, L"TOP RAM");
 }
 // l'immagine delle parti fisse per questo bersaglio; se non si riesce a farla, le parti fisse si disegnano a ogni fotogramma
 static bool StaticReady(float W, float H, int ndrive)
@@ -653,14 +697,14 @@ static void DrawPanel(const State& s, const Ui& ui, float W, float H)
     for (int i = 0; i < s.ndrive; i++) { dv[i].gb(s.drives[i].freeGb).t(L" free of ").gb(s.drives[i].totalGb); float w = TextW(F_MONO, dv[i].s); if (w > dw) dw = w; }
     const float bw = floorf(RW - 30 - dw - 8);
     for (int i = 0; i < s.ndrive; i++) {
-        float mid = y + i * 17 + 8.5f, used = s.drives[i].totalGb > 0 ? 1 - s.drives[i].freeGb / s.drives[i].totalGb : 0;
+        float mid = y + i * l.rowH + l.rowH / 2, used = s.drives[i].totalGb > 0 ? 1 - s.drives[i].freeGb / s.drives[i].totalGb : 0;
         Text(F_TEXT, X, mid, s.drives[i].name, C_TEXT2);
         Text(F_MONO, X + RW, mid, dv[i].s, C_TEXT2, true);
         // grigia finché c'è posto, nel rosso del disco da 80 % pieno in su: il rosso compare solo quando serve
         R(X + 30, floorf(mid - 2.5f), bw, 5, C_LINESOFT); R(X + 30, floorf(mid - 2.5f), floorf(bw * Clampf(used, 0, 1) + .5f), 5, used < kDriveFull ? C_MUTED : C_DSK);
     }
-    TopRows(X, l.yTop, l.tw, s.topCpu, s.nTopCpu, true, ui.hotRegion >= RG_TOPCPU && ui.hotRegion < RG_TOPCPU + NTOP ? ui.hotRegion - RG_TOPCPU : -1);
-    TopRows(X + RW - l.tw, l.yTop, l.tw, s.topRam, s.nTopRam, false, ui.hotRegion >= RG_TOPRAM && ui.hotRegion < RG_TOPRAM + NTOP ? ui.hotRegion - RG_TOPRAM : -1);
+    TopRows(X, l.yTop, l.tw, l.rowH, s.topCpu, s.nTopCpu, true, ui.hotRegion >= RG_TOPCPU && ui.hotRegion < RG_TOPCPU + NTOP ? ui.hotRegion - RG_TOPCPU : -1);
+    TopRows(X + RW - l.tw, l.yTop, l.tw, l.rowH, s.topRam, s.nTopRam, false, ui.hotRegion >= RG_TOPRAM && ui.hotRegion < RG_TOPRAM + NTOP ? ui.hotRegion - RG_TOPRAM : -1);
     if (ui.cross > 0 && ui.cross <= HIST) Cross(s, l, ui.cross - 1);
     if (ui.picker) DrawPicker(W, ui.hotArrow);
 }
@@ -805,4 +849,58 @@ bool DrawToDc(HDC memdc, int w, int h, float dpi, const State& s, const Ui& ui)
     if (FAILED(dc->BindDC(memdc, &rc)) || !ResCreate(dc)) return false;
     dc->BeginDraw(); DrawPanel(s, ui, w * 96 / dpi, h * 96 / dpi);
     return SUCCEEDED(dc->EndDraw());
+}
+
+// ---- la finestra Aspetto (popups.cpp): quattro riquadri con la legenda sulla cornice, come quelli degli elenchi. I colori sono
+// cinque tessere in fila col nome dentro; le altre scelte una riga l'una, con un cerchio pieno su quella in uso ----
+static const float kApW = 372, kApH = 284;
+struct ApBox { float x, y, w, h; const wchar_t* legend; };
+static const ApBox kApBox[AP_GROUPS] = { { 14, 20, 344, 54, L"ACCENT" }, { 14, 92, 165, 92, L"THEME" }, { 193, 92, 165, 92, L"TRANSPARENCY" }, { 14, 202, 165, 68, L"DENSITY" } };
+static const wchar_t* const kApLabel[AP_GROUPS][NACCENT] = {
+    { L"green", L"amber", L"cyan", L"lime", L"Windows" }, { L"Dark", L"Light", L"Follow Windows" }, { L"Off", L"Low", L"High" }, { L"Compact", L"Comfortable" } };
+static const int kApCount[AP_GROUPS] = { NACCENT, 3, 3, 2 };
+struct ApOpt { int group, value; float x, y, w, h; };
+static int ApOptions(ApOpt* o)
+{
+    int n = 0;
+    for (int g = 0; g < AP_GROUPS; g++) for (int v = 0; v < kApCount[g]; v++) {
+        const ApBox& b = kApBox[g]; ApOpt& p = o[n++]; p.group = g; p.value = v;
+        if (g == AP_ACCENT) { p.w = 56; p.h = 30; p.x = b.x + 12 + v * 66.f; p.y = b.y + 12; }
+        else { p.x = b.x + 1; p.w = b.w - 2; p.h = 24; p.y = b.y + 12 + v * 24.f; }
+    }
+    return n;
+}
+void AppearanceSize(float& w, float& h) { w = kApW; h = kApH; }
+int AppearanceAt(float x, float y)
+{
+    ApOpt o[16]; const int n = ApOptions(o);
+    for (int i = 0; i < n; i++) if (x >= o[i].x && x < o[i].x + o[i].w && y >= o[i].y && y < o[i].y + o[i].h) return o[i].group * 16 + o[i].value;
+    return -1;
+}
+void AppearancePaint(HDC dc, int wpx, int hpx, float dpi, const Appearance& a)
+{
+    if (!PopBegin(dc, wpx, hpx, dpi)) return;
+    g_rt->Clear(Col(C_BG));
+    for (int g = 0; g < AP_GROUPS; g++) LegendFrame(kApBox[g].x, kApBox[g].y, kApBox[g].w, kApBox[g].h, kApBox[g].legend);
+    ApOpt o[16]; const int n = ApOptions(o);
+    for (int i = 0; i < n; i++) {
+        const ApOpt& p = o[i]; const wchar_t* label = kApLabel[p.group][p.value];
+        const bool on = a.value[p.group] == p.value, hot = a.hot == p.group * 16 + p.value;
+        if (p.group == AP_ACCENT) {                                                  // la tessera in uso ha una cornice staccata, nel colore del testo
+            const unsigned c = a.swatch[p.value];
+            R(p.x, p.y, p.w, p.h, c);
+            Text(F_MONO9, p.x + 5, p.y + p.h - 8, label, Luminance(c) > .3f ? 0x0b0d10 : 0xffffff);
+            if (on || hot) Frame(p.x - 3, p.y - 3, p.w + 6, p.h + 6, on ? C_TEXT : C_MUTED);
+            continue;
+        }
+        if (hot) R(p.x + 3, p.y, p.w - 6, p.h, C_TEXT, .07f);
+        const D2D1_POINT_2F c = D2D1::Point2F(p.x + 16, p.y + p.h / 2);
+        Smooth(true);
+        g_br->SetColor(Col(on ? C_ACCENT : C_MUTED)); g_rt->DrawEllipse(D2D1::Ellipse(c, 5, 5), g_br, 1.3f);
+        if (on) g_rt->FillEllipse(D2D1::Ellipse(c, 2.4f, 2.4f), g_br);
+        Smooth(false);
+        Text(F_TEXT, p.x + 30, p.y + p.h / 2, label, on ? C_TEXT : C_TEXT2);
+    }
+    Text(F_SMALL, 193, 216, L"Changes apply at once", C_MUTED); Text(F_SMALL, 193, 232, L"and are saved.", C_MUTED);
+    PopEnd();
 }

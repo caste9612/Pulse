@@ -11,12 +11,17 @@
 //                       --ago <n> la lettura di n secondi fa, come col mouse sui grafici
 //   --dump <file.txt>   legge i dati per un secondo e li scrive come testo, per confrontarli con i contatori di Windows
 //   --bench <n>         disegna n fotogrammi di fila con dati finti sempre uguali e scrive nel log quanta CPU è costato ognuno
+//   --accent <0..4>, --opacity <0..2>, --density <0..1>   le scelte della finestra Aspetto, al posto di quelle salvate
+//   --after <pid>       una ripartenza: aspetta che quel Pulse 2 sia uscito (lo aggiunge Pulse 2 quando riparte da solo)
+//   --test-hover        per le prove fatte mandando messaggi alla finestra: quello che un movimento del mouse accende resta acceso
+//                       anche se il mouse vero è altrove
 #include "app.h"
 #include <windowsx.h>
 #include <shellapi.h>
 #include <dwmapi.h>
 #include <tlhelp32.h>
 #include <wtsapi32.h>
+#include <cfgmgr32.h>
 #include "shared.h"
 
 FontData g_fontData[NFILE];
@@ -25,16 +30,16 @@ static Ui g_ui = { -1, true, 0, false, -1 };
 static HWND g_hwnd;
 static HINSTANCE g_inst;
 static int g_seconds; static unsigned g_ticks;
-static bool g_nosave, g_noact, g_demoUi, g_demoData;
+static bool g_nosave, g_noact, g_demoUi, g_demoData, g_testHover;
 static int g_shotDpi = 96, g_shotAgo = -1;
 static bool g_locked, g_displayOff;                                                  // a schermo bloccato o spento non si disegna
 static const GUID kDisplayState = { 0x6fe69556, 0x704a, 0x47a0, { 0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47 } };   // GUID_CONSOLE_DISPLAY_STATE
 static int g_pressed = -1, g_pressedArrow = -1; static bool g_tracking;
 static float g_minW = 420; static int g_minDrives = -1;
 static UINT g_msgTaskbar, g_msgShow;
-enum { TIMER_TICK = 1, TIMER_TIP };
-enum { ID_SHOW = 1, ID_DARK, ID_LIGHT, ID_FOLLOW, ID_TOPMOST, ID_AUTOSTART, ID_EXIT, ID_CORNER = 10,   // ID_CORNER + 0..3: alto sx, alto dx, basso sx, basso dx
-       ID_P_OPEN = 20, ID_P_PROPS, ID_P_END, ID_P_SEARCH };                           // il menu di un programma di Top CPU o Top RAM
+enum { TIMER_TICK = 1, TIMER_TIP, TIMER_GPU };
+static const wchar_t* g_cmd = L"";                                                    // gli argomenti con cui è partito: gli stessi di una ripartenza
+static HCMNOTIFICATION g_gpuNotify;
 static Region g_rg[48]; static int g_nrg;                                             // le zone del pannello, rifatte quando cambia la misura
 static Program g_menuProg;                                                            // il programma su cui è aperto il menu
 
@@ -86,8 +91,10 @@ static float Scale(HWND hwnd) { return GetDpiForWindow(hwnd) / 96.f; }
 static int Px(HWND hwnd, float units) { return (int)(units * Scale(hwnd) + .5f); }
 
 // ---- impostazioni: poche righe chiave=valore ----
-struct Settings { bool have; int left, top, width; bool visible, topmost; int theme; };   // tema: 0 scuro, 1 chiaro, 2 come Windows
-static Settings g_set = { false, 0, 0, PANEL_W, true, true, 0 };
+// tema: 0 scuro, 1 chiaro, 2 come Windows; accento: 0..3 quelli di Reticle, 4 quello di Windows; trasparenza: 0 nessuna, 1 bassa,
+// 2 alta; densità: 0 compatta, 1 comoda
+struct Settings { bool have; int left, top, width; bool visible, topmost; int theme, accent, opacity, density; };
+static Settings g_set = { false, 0, 0, PANEL_W, true, true, 0, 0, 0, 0 };
 
 static bool SettingsPath(wchar_t* path, bool create)
 {
@@ -110,16 +117,22 @@ static void SettingsLoad()
         if (!lstrcmpA(key, "left")) { g_set.left = v; g_set.have = true; } else if (!lstrcmpA(key, "top")) g_set.top = v;
         else if (!lstrcmpA(key, "width")) g_set.width = v; else if (!lstrcmpA(key, "visible")) g_set.visible = v != 0;
         else if (!lstrcmpA(key, "topmost")) g_set.topmost = v != 0; else if (!lstrcmpA(key, "theme")) g_set.theme = v;
+        else if (!lstrcmpA(key, "accent")) g_set.accent = v; else if (!lstrcmpA(key, "opacity")) g_set.opacity = v;
+        else if (!lstrcmpA(key, "density")) g_set.density = v;
     }
     if (g_set.width < 300 || g_set.width > 1600) g_set.width = PANEL_W;
     if (g_set.theme < 0 || g_set.theme > 2) g_set.theme = 0;
+    if (g_set.accent < 0 || g_set.accent >= NACCENT) g_set.accent = 0;
+    if (g_set.opacity < 0 || g_set.opacity > 2) g_set.opacity = 0;
+    if (g_set.density < 0 || g_set.density > 1) g_set.density = 0;
 }
 static void SettingsSave()
 {
-    wchar_t path[MAX_PATH]; char buf[160];
+    wchar_t path[MAX_PATH]; char buf[256];
     if (g_nosave || !g_hwnd || !SettingsPath(path, true)) return;
     RECT rc; GetWindowRect(g_hwnd, &rc); g_set.left = rc.left; g_set.top = rc.top;
-    int n = wsprintfA(buf, "left=%d\ntop=%d\nwidth=%d\nvisible=%d\ntopmost=%d\ntheme=%d\n", g_set.left, g_set.top, g_set.width, g_set.visible, g_set.topmost, g_set.theme);
+    int n = wsprintfA(buf, "left=%d\ntop=%d\nwidth=%d\nvisible=%d\ntopmost=%d\ntheme=%d\naccent=%d\nopacity=%d\ndensity=%d\n",
+                      g_set.left, g_set.top, g_set.width, g_set.visible, g_set.topmost, g_set.theme, g_set.accent, g_set.opacity, g_set.density);
     HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
     DWORD w; WriteFile(f, buf, n, &w, nullptr); CloseHandle(f);
@@ -151,7 +164,7 @@ static bool WindowsIsLight()
 static void ApplyTheme()
 {
     bool light = g_set.theme == 1 || (g_set.theme == 2 && WindowsIsLight());
-    const Theme* t = light ? &kLight : &kDark;
+    const Theme* t = light ? &g_light : &g_dark;
     if (t == g_theme && g_hwnd) return;
     g_theme = t;
     if (!g_hwnd) return;
@@ -377,6 +390,78 @@ static void ProgramCommand(HWND hwnd, int id)
     }
 }
 
+// ---- le scelte della finestra Aspetto (popups.cpp): accento, trasparenza, densità; il tema è quello di ApplyTheme ----
+// i quattro accenti di Reticle: come si vedono nel tema scuro, e il colore da cui si ricava quello del tema chiaro
+static const unsigned kAccent[NACCENT - 1][2] = { { 0x3ddc84, 0x00a376 }, { 0xff8a1f, 0xff8a1f }, { 0x3fc7ff, 0x3fc7ff }, { 0xb7f531, 0xb7f531 } };
+static unsigned WindowsAccent()
+{
+    DWORD v = 0, n = sizeof(v);                                                      // 0xAABBGGRR
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\DWM", L"AccentColor", RRF_RT_REG_DWORD, nullptr, &v, &n) != ERROR_SUCCESS) return kAccent[0][0];
+    return (v & 0xff) << 16 | (v & 0xff00) | (v >> 16 & 0xff);
+}
+static void ApplyAccent()
+{
+    if (g_set.accent == NACCENT - 1) { const unsigned c = WindowsAccent(); DrawSetAccent(c, c); }
+    else DrawSetAccent(kAccent[g_set.accent][0], kAccent[g_set.accent][1]);
+    if (g_hwnd) { InvalidateRect(g_hwnd, nullptr, FALSE); PopupsRedraw(); }
+}
+// Trasparenza: tutto il pannello lascia vedere quello che ha dietro, poco o di più. Non è il fondo sfocato di Pulse 1.x: quello
+// chiedeva un altro modo di disegnare, che nella prova del 26/11/2026 costava memoria senza che si vedesse la differenza
+static void ApplyOpacity(HWND hwnd)
+{
+    static const BYTE alpha[3] = { 255, 235, 204 };                                  // 100 %, 92 %, 80 %
+    const LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if (!g_set.opacity) { if (ex & WS_EX_LAYERED) SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex & ~(LONG_PTR)WS_EX_LAYERED); }
+    else {
+        if (!(ex & WS_EX_LAYERED)) SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED);
+        SetLayeredWindowAttributes(hwnd, 0, alpha[g_set.opacity], LWA_ALPHA);
+    }
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_FRAME);
+}
+// Densità: più aria tra le metriche e righe più alte negli elenchi; il testo resta della stessa misura. Cambia l'altezza del pannello
+static void ApplyDensity()
+{
+    DrawSetDensity(g_set.density);
+    if (g_hwnd) { FitHeight(g_hwnd); RegionsLayout(g_hwnd); InvalidateRect(g_hwnd, nullptr, FALSE); }
+}
+void AppearanceGet(Appearance& a)
+{
+    a.value[AP_ACCENT] = g_set.accent; a.value[AP_THEME] = g_set.theme; a.value[AP_OPACITY] = g_set.opacity; a.value[AP_DENSITY] = g_set.density; a.hot = -1;
+    for (int i = 0; i < NACCENT - 1; i++) a.swatch[i] = kAccent[i][0];
+    a.swatch[NACCENT - 1] = WindowsAccent();
+}
+
+// ---- il driver della scheda video è cambiato ----
+// Un aggiornamento del driver (anche da Windows Update), un reset dopo un blocco, una scheda tolta: Windows avvisa che un adattatore
+// video è sparito o comparso. La libreria NVIDIA resta legata al driver con cui è stata aperta, e chiamarla dopo può far cadere il
+// processo: da subito non la si chiama più, e cinque secondi dopo l'ultimo avviso (un aggiornamento ne manda più d'uno) Pulse 2
+// riparte da capo, come fa Pulse 1.x. L'avviso arriva su un thread di Windows: lì solo una variabile e un messaggio
+static const GUID kDisplayAdapter = { 0x5b45201d, 0xf2f2, 0x4f3b, { 0x85, 0xbb, 0x30, 0xff, 0x1f, 0x95, 0x35, 0x99 } };   // GUID_DEVINTERFACE_DISPLAY_ADAPTER
+static DWORD CALLBACK OnDisplayAdapter(HCMNOTIFICATION, PVOID context, CM_NOTIFY_ACTION action, PCM_NOTIFY_EVENT_DATA, DWORD)
+{
+    if (action == CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL || action == CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL) { SlowGpuOff(); PostMessageW((HWND)context, WM_GPU_CHANGED, 0, 0); }
+    return ERROR_SUCCESS;
+}
+static void GpuWatchStart(HWND hwnd)
+{
+    CM_NOTIFY_FILTER f = {}; f.cbSize = sizeof(f); f.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE; f.u.DeviceInterface.ClassGuid = kDisplayAdapter;
+    if (CM_Register_Notification(&f, hwnd, OnDisplayAdapter, &g_gpuNotify) != CR_SUCCESS) { g_gpuNotify = nullptr; LogLine("display adapter watch not started"); }
+}
+// riparte con gli stessi argomenti; il nuovo aspetta che questo sia uscito prima di prendersi l'istanza unica (--after)
+static void Restart(HWND hwnd)
+{
+    wchar_t exe[MAX_PATH]; if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return;
+    Lb cmd; cmd.c(L'"').t(exe).t(L"\" ");
+    const wchar_t* old = Find(g_cmd, L"--after"); const wchar_t* cut = old ? old - 7 : nullptr;   // quello di una ripartenza precedente si toglie
+    for (const wchar_t* p = g_cmd; *p && p != cut; p++) cmd.c(*p);
+    cmd.t(L" --after ").i((long long)GetCurrentProcessId());
+    STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
+    LogLine("display adapter changed: restarting");
+    if (!CreateProcessW(exe, cmd.s, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) { LogLine("restart FAILED: going on without the GPU readings"); return; }
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    DestroyWindow(hwnd);
+}
+
 // ---- tray ----
 // L'icona può non esserci senza che Pulse lo sappia: la shell non era pronta all'avvio, è ripartita, oppure una barra di terze parti
 // si è agganciata al tray dopo di noi. Due rimedi: «TaskbarCreated» la rimette, e la rimette ogni aggiornamento del tooltip che la
@@ -421,6 +506,7 @@ static void TrayMenu(HWND hwnd, int x, int y)
     m.add(MI_ITEM, ID_SHOW, IsWindowVisible(hwnd) ? L"Hide" : L"Show").add(MI_SEP);
     m.add(MI_HEAD, 0, L"THEME").add(MI_ITEM, ID_DARK, L"Dark", g_set.theme == 0).add(MI_ITEM, ID_LIGHT, L"Light", g_set.theme == 1);
     m.add(MI_ITEM, ID_FOLLOW, L"Follow Windows", g_set.theme == 2).add(MI_SEP);
+    m.add(MI_ITEM, ID_APPEARANCE, L"Appearance...");
     m.add(MI_ITEM, ID_TOPMOST, L"Always on top", g_set.topmost).add(MI_ITEM, ID_AUTOSTART, L"Start with Windows", Autostart()).add(MI_SEP);
     m.add(MI_ITEM, ID_EXIT, L"Exit");
     POINT at = { x, y }; MenuOpen(m, at);
@@ -440,8 +526,13 @@ static void Command(HWND hwnd, int id)
     case ID_TOPMOST: SetTopmost(hwnd, !g_set.topmost); break;
     case ID_AUTOSTART: SetAutostart(!Autostart()); break;
     case ID_EXIT: DestroyWindow(hwnd); break;
+    case ID_APPEARANCE: AppearanceOpen(); break;
     case ID_P_OPEN: case ID_P_PROPS: case ID_P_END: case ID_P_SEARCH: ProgramCommand(hwnd, id); break;
-    default: if (id >= ID_CORNER && id < ID_CORNER + 4) MoveToCorner(hwnd, (id - ID_CORNER) & 1, (id - ID_CORNER) >= 2);
+    default:
+        if (id >= ID_CORNER && id < ID_CORNER + 4) MoveToCorner(hwnd, (id - ID_CORNER) & 1, (id - ID_CORNER) >= 2);
+        else if (id >= ID_ACCENT && id < ID_ACCENT + NACCENT) { g_set.accent = id - ID_ACCENT; ApplyAccent(); SettingsSave(); }
+        else if (id >= ID_OPACITY && id < ID_OPACITY + 3) { g_set.opacity = id - ID_OPACITY; ApplyOpacity(hwnd); SettingsSave(); }
+        else if (id >= ID_DENSITY && id < ID_DENSITY + 2) { g_set.density = id - ID_DENSITY; ApplyDensity(); SettingsSave(); }
     }
 }
 static void Button(HWND hwnd, int k)
@@ -498,6 +589,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_NCMOUSEMOVE: NoHover(hwnd); break;
     case WM_SHOWWINDOW: if (!wp) NoHover(hwnd); break;                             // nascosto nel tray: niente resta acceso
     case WM_MENU_CLOSED: SetHover(hwnd, -1, 0, -1, 0); return 0;                    // il prossimo movimento del mouse dirà che cosa c'è sotto
+    case WM_GPU_CHANGED: SetTimer(hwnd, TIMER_GPU, 5000, nullptr); return 0;        // ogni avviso fa ripartire i cinque secondi
+    case WM_DWMCOLORIZATIONCOLORCHANGED: if (g_set.accent == NACCENT - 1) ApplyAccent(); break;   // l'accento di Windows è cambiato
     case WM_GETMINMAXINFO: {
         MINMAXINFO* m = (MINMAXINFO*)lp; int h = Px(hwnd, PanelHeight(g_state));
         m->ptMinTrackSize.x = Px(hwnd, MinWidth()); m->ptMaxTrackSize.x = Px(hwnd, 1600); m->ptMinTrackSize.y = m->ptMaxTrackSize.y = h;
@@ -525,6 +618,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (g_tipRegion && !MenuIsOpen()) { g_tipOn = true; TipRefresh(); }
             return 0;
         }
+        if (wp == TIMER_GPU) { KillTimer(hwnd, TIMER_GPU); Restart(hwnd); return 0; }
         MetricsTick(g_state); SlowCopy(g_state); SensorsExchange(g_state); FitHeight(hwnd);
         static ULONGLONG minute; if (g_state.uptimeSec / 60 != minute) { minute = g_state.uptimeSec / 60; RegionsLayout(hwnd); }   // la riga della testata si allunga coi minuti
         // nascosto nel tray, a schermo bloccato o spento legge, così il minuto è pronto quando torna, ma non disegna
@@ -545,14 +639,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         const RECT* r = (const RECT*)lp;
         SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
         DrawResize(hwnd); FitHeight(hwnd); return 0; }
-    case WM_SETTINGCHANGE: if (g_set.theme == 2) ApplyTheme(); return 0;            // Windows è passato da chiaro a scuro, o viceversa
+    case WM_SETTINGCHANGE:                                                          // Windows è passato da chiaro a scuro, o ha cambiato colore
+        if (g_set.theme == 2) ApplyTheme();
+        if (g_set.accent == NACCENT - 1) ApplyAccent();
+        return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps; BeginPaint(hwnd, &ps);
         DrawPaint(hwnd, g_state, g_ui);
         EndPaint(hwnd, &ps);
         return 0; }
     case WM_MOUSEMOVE:
-        if (!g_tracking) { TRACKMOUSEEVENT t = { sizeof(t), TME_LEAVE, hwnd, 0 }; g_tracking = TrackMouseEvent(&t) != 0; }
+        // in prova (--test-hover) i movimenti arrivano come messaggi, senza il mouse vero sopra: Windows direbbe subito che è uscito
+        if (!g_tracking && !g_testHover) { TRACKMOUSEEVENT t = { sizeof(t), TME_LEAVE, hwnd, 0 }; g_tracking = TrackMouseEvent(&t) != 0; }
         {
             const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp), arrow = ArrowAt(hwnd, x, y), region = arrow >= 0 ? 0 : RegionAt(hwnd, x, y);
             RECT rc; GetClientRect(hwnd, &rc); const float sc = Scale(hwnd);
@@ -583,7 +681,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
     case WM_COMMAND: Command(hwnd, LOWORD(wp)); return 0;
-    case WM_DESTROY: WTSUnRegisterSessionNotification(hwnd); TrayRemove(hwnd); SettingsSave(); SlowStop(); PostQuitMessage(0); return 0;
+    case WM_DESTROY:
+        if (g_gpuNotify) { CM_Unregister_Notification(g_gpuNotify); g_gpuNotify = nullptr; }
+        WTSUnRegisterSessionNotification(hwnd); TrayRemove(hwnd); SettingsSave(); SlowStop(); PostQuitMessage(0);
+        return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -711,11 +812,15 @@ static int Dump(const wchar_t* arg)
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
 {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    g_inst = inst;
+    g_inst = inst; g_cmd = cmd;
     g_nosave = Find(cmd, L"--nosave") != nullptr; g_noact = Find(cmd, L"--noactivate") != nullptr; g_demoUi = Find(cmd, L"--demo-ui") != nullptr; g_demoData = Find(cmd, L"--demo-data") != nullptr;
+    g_testHover = Find(cmd, L"--test-hover") != nullptr;
     bool tool = Find(cmd, L"--shot") || Find(cmd, L"--dump");
     if (tool) g_nosave = true;
 
+    if (const wchar_t* p = Find(cmd, L"--after")) {                                 // una ripartenza: il Pulse 2 di prima sta ancora uscendo
+        if (HANDLE old = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)ReadInt(p))) { WaitForSingleObject(old, 5000); CloseHandle(old); }
+    }
     // un'istanza sola: la seconda dice alla prima di mostrarsi ed esce
     g_msgShow = RegisterWindowMessageW(L"Pulse2.Show");
     if (!g_nosave) {
@@ -735,7 +840,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
     if (const wchar_t* p = Find(cmd, L"--seconds")) g_seconds = ReadInt(p);
     if (const wchar_t* p = Find(cmd, L"--dpi")) { g_shotDpi = ReadInt(p); if (g_shotDpi < 96 || g_shotDpi > 384) g_shotDpi = 96; }
     if (const wchar_t* p = Find(cmd, L"--ago")) g_shotAgo = ReadInt(p);
-    ApplyTheme();
+    if (const wchar_t* p = Find(cmd, L"--accent")) { g_set.accent = ReadInt(p); if (g_set.accent < 0 || g_set.accent >= NACCENT) g_set.accent = 0; }
+    if (const wchar_t* p = Find(cmd, L"--opacity")) { g_set.opacity = ReadInt(p); if (g_set.opacity < 0 || g_set.opacity > 2) g_set.opacity = 0; }
+    if (const wchar_t* p = Find(cmd, L"--density")) g_set.density = ReadInt(p) == 1;
+    ApplyTheme(); ApplyAccent(); DrawSetDensity(g_set.density);
     if (const wchar_t* p = Find(cmd, L"--shot")) return Shot(p);
     if (const wchar_t* p = Find(cmd, L"--dump")) return Dump(p);
 
@@ -766,7 +874,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int)
     // senza di lei l'annuncio della shell (che elevata non è) verrebbe fermato prima di arrivare. Si apre solo a questo messaggio,
     // che non porta dati: non ai comandi, che arrivano dal nostro stesso menu
     ChangeWindowMessageFilterEx(hwnd, g_msgTaskbar, MSGFLT_ALLOW, nullptr);
-    TrayAdd(hwnd); PopupsInit(inst, hwnd); RegionsLayout(hwnd);
+    TrayAdd(hwnd); PopupsInit(inst, hwnd); RegionsLayout(hwnd); GpuWatchStart(hwnd);
+    if (g_set.opacity) ApplyOpacity(hwnd);
     WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION); RegisterPowerSettingNotification(hwnd, &kDisplayState, DEVICE_NOTIFY_WINDOW_HANDLE);
     if (g_set.visible) {
         ShowWindow(hwnd, g_noact ? SW_SHOWNOACTIVATE : SW_SHOW);

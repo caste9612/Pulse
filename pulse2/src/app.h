@@ -64,6 +64,7 @@ void SlowStart();
 void SlowStop();
 void SlowCopy(State& s);                // porta nel pannello le ultime letture lente
 void SlowOnce();                        // un giro completo, subito (per --shot e --dump)
+void SlowGpuOff();                      // il driver video è cambiato: la libreria NVIDIA non si chiama più fino al riavvio
 // il dialogo col processo dei sensori, l'unico con i diritti di amministratore (sensors.cpp)
 void SensorsInit();
 void SensorsExchange(State& s);         // una volta al secondo, dopo le letture
@@ -107,7 +108,7 @@ struct Theme {
     float grid;                                                                      // forza delle righe del tempo nei grafici
     bool light;
 };
-extern const Theme kDark, kLight;
+extern Theme g_dark, g_light;                                                        // non costanti: l'accento si sceglie
 extern const Theme* g_theme;                                                         // quello in uso
 #define C_BG (g_theme->bg)
 #define C_SURF2 (g_theme->surf2)
@@ -183,11 +184,18 @@ int GraphSecondAt(const State& s, float W, float x, float y);                   
 bool DrawCreate(HWND hwnd);
 void DrawResize(HWND hwnd);
 void DrawThemeChanged();                                                             // il tema è cambiato: si rifanno letto puntinato e sfumature
+void DrawSetAccent(unsigned dark, unsigned lightBase);                               // l'accento nel tema scuro, e il colore da cui si ricava quello del chiaro
+void DrawSetDensity(int density);                                                    // 0 compatta, 1 comoda: cambia l'altezza del pannello
 void DrawPaint(HWND hwnd, const State& s, const Ui& ui);
 bool DrawToDc(HDC memdc, int w, int h, float dpi, const State& s, const Ui& ui);     // una resa fuori schermo, senza finestra; w e h in pixel
 
 // ---- tooltip e menu: due finestrelle disegnate da Pulse con i caratteri e il bordo del pannello (popups.cpp; il disegno è in draw.cpp) ----
-enum { WM_TRAY = WM_APP + 1, WM_MENU_CLOSED };                                       // i messaggi privati della finestra del pannello
+enum { WM_TRAY = WM_APP + 1, WM_MENU_CLOSED, WM_GPU_CHANGED };                       // i messaggi privati della finestra del pannello
+// i comandi che arrivano al pannello come WM_COMMAND: dal menu del tray, da quello di un programma, dalla finestra Aspetto
+enum { ID_SHOW = 1, ID_DARK, ID_LIGHT, ID_FOLLOW, ID_TOPMOST, ID_AUTOSTART, ID_EXIT, ID_APPEARANCE,
+       ID_CORNER = 10,                                                               // + 0..3: alto sx, alto dx, basso sx, basso dx
+       ID_P_OPEN = 20, ID_P_PROPS, ID_P_END, ID_P_SEARCH,                            // il menu di un programma di Top CPU o Top RAM
+       ID_ACCENT = 30, ID_OPACITY = 40, ID_DENSITY = 50 };                           // + la scelta, dalla finestra Aspetto
 enum { MI_ITEM, MI_SEP, MI_HEAD };                                                   // una voce, una riga di separazione, un titolo che non si sceglie
 struct MenuItem { int kind, id; bool checked; wchar_t text[40]; };
 struct Menu {
@@ -210,3 +218,13 @@ void TipHide();
 void MenuOpen(const Menu& m, POINT at);                                              // la voce scelta arriva al pannello come WM_COMMAND; alla chiusura, WM_MENU_CLOSED
 bool MenuIsOpen();
 void PopupsRedraw();                                                                 // il tema è cambiato
+
+// ---- la finestra Aspetto: accento, tema, trasparenza e densità. Ogni scelta vale subito e resta salvata ----
+enum { AP_ACCENT, AP_THEME, AP_OPACITY, AP_DENSITY, AP_GROUPS };
+enum { NACCENT = 5 };                                                                // verde, ambra, ciano, lime (quelli di Reticle), e il colore di Windows
+struct Appearance { int value[AP_GROUPS]; int hot; unsigned swatch[NACCENT]; };      // hot: gruppo * 16 + scelta sotto il mouse, -1 nessuna
+void AppearanceGet(Appearance& a);                                                   // le scelte in uso (main.cpp)
+void AppearanceSize(float& w, float& h);
+int AppearanceAt(float x, float y);                                                  // gruppo * 16 + scelta a quel punto, -1 se non c'è
+void AppearancePaint(HDC dc, int wpx, int hpx, float dpi, const Appearance& a);
+void AppearanceOpen();                                                               // la scelta arriva al pannello come WM_COMMAND

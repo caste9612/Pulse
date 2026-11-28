@@ -38,6 +38,16 @@ programs instead of processes) with Direct2D rendered by the CPU, on an opaque b
   its tooltip, **settings** in `%APPDATA%\Pulse2\settings.txt`, a **single instance**. If the shell loses the icon
   (it restarted, was not ready at startup, or a third-party bar hooked the tray later), Pulse 2 puts it back: at once
   when the shell announces itself, otherwise at the next tooltip update, within half a minute.
+- **Appearance window**, from the tray menu: the accent (Reticle's green, amber, cyan and lime, or the colour Windows
+  uses), the theme, transparency and density. Every choice applies at once and is saved. Transparency here is the whole
+  panel letting what is behind it show through, a little or more; it is not the blurred backdrop of Pulse 1.x, which
+  needs another way of drawing that cost memory in the prototype for a difference that could not be seen. Density adds
+  air between the metrics and height to the rows of the lists; the text keeps its size.
+- **A changed display driver** (an update, also from Windows Update, a reset after a hang, a card removed): the NVIDIA
+  library stays tied to the driver it was opened with, and calling it afterwards can take the process down. Windows
+  tells Pulse 2 that a display adapter went or came: from that moment the library is not called, and five seconds after
+  the last notice Pulse 2 starts again by itself, as Pulse 1.x does. A crashing call is caught anyway (`__try`) and
+  turns the GPU readings off instead of taking the process down.
 - **Drawing only when someone can see it**: hidden in the tray, with the session locked or the display off, Pulse 2
   keeps reading, so the last minute is there when it comes back, but draws nothing.
 - **Tooltips** for the cores, the memory, the GPU, the power estimate, the header buttons and each program row, and the
@@ -78,9 +88,7 @@ Checked on the reference PC on 27/11/2026, next to the installed Pulse:
 
 - The Scheduled Task that starts the sensors process elevated at logon: for now it is started by hand.
 - GPUs other than NVIDIA, the Wi-Fi name and signal, the SSD temperature.
-- The watch on display driver changes. A crashing NVML call is caught (`__try`) and turns the GPU readings off until
-  the next start, instead of taking the process down.
-- The accent, transparency and density of Pulse 1.x's *Appearance* window.
+- Of Pulse 1.x's *Appearance* window: an accent typed as a colour code, and the blurred backdrop.
 - Vertical scrolling: the window is as high as its content, so on a short screen the bottom is cut.
 - An installer, and the passage of the settings from Pulse 1.x.
 
@@ -96,6 +104,8 @@ Checked on the reference PC on 27/11/2026, next to the installed Pulse:
 | `--noactivate`, `--seconds <n>` | don't take the focus; close after n seconds |
 | `--shot <file.bmp>` | read for a second, render one frame off screen, save it and exit; `--demo-ui` adds a hovered row and the open corner arrows, `--demo-data` uses the made-up data of `--bench`, `--ago <n>` adds the reading of n seconds ago, `--dpi <n>` another scale (144 is 150%) |
 | `--bench <n>` | draw n frames in a row with the same made-up data and log the CPU each one cost |
+| `--accent <0..4>`, `--opacity <0..2>`, `--density <0..1>` | the choices of the Appearance window, instead of the saved ones |
+| `--after <pid>` | wait for that Pulse 2 to exit before starting: added by Pulse 2 when it restarts itself |
 | `--dump <file.txt>` | read for a second and write the readings, the regions and their tooltips as text |
 
 The sensors process builds with `dotnet build sensors` and takes `--fake` (made-up values instead of sensors and
